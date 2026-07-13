@@ -17,7 +17,7 @@ export type StockSnapshot = {
 
 export type HeroScore = {
   score: number;
-  classification: "شراء مشروط" | "مراقبة" | "استبعاد";
+  classification: "فرصة مضاربة قوية" | "استبعاد";
   reasons: string[];
 };
 
@@ -25,62 +25,82 @@ export function scoreMaherHero(stock: StockSnapshot): HeroScore {
   let score = 0;
   const reasons: string[] = [];
 
+  // الاتجاه العام — 15 نقطة
   if (stock.trend === "up") {
     score += 15;
     reasons.push("الاتجاه العام صاعد");
-  } else if (stock.trend === "sideways") {
-    score += 7;
   }
 
+  // MACD — 15 نقطة
   if (stock.macdSignal === "bullish") {
     score += 15;
-    reasons.push("MACD إيجابي");
-  } else if (stock.macdSignal === "neutral") {
-    score += 6;
+    reasons.push("MACD إيجابي ويدعم استمرار الزخم");
   }
 
-  if (stock.rsi >= 48 && stock.rsi <= 68) {
-    score += 10;
-    reasons.push("RSI في منطقة زخم مناسبة");
-  } else if (stock.rsi >= 35 && stock.rsi < 48) {
-    score += 5;
-  }
-
-  if (stock.volumeRatio >= 2) {
-    score += 20;
-    reasons.push("حجم التداول أعلى من المتوسط بوضوح");
-  } else if (stock.volumeRatio >= 1.3) {
-    score += 12;
-  }
-
-  if (stock.breakout === "early") {
+  // RSI — 15 نقطة
+  if (stock.rsi >= 52 && stock.rsi <= 66) {
     score += 15;
-    reasons.push("بداية اختراق وليست مطاردة متأخرة");
+    reasons.push("RSI في منطقة زخم مثالية للمضاربة");
+  } else if (stock.rsi >= 48 && stock.rsi <= 70) {
+    score += 8;
+  }
+
+  // حجم التداول — 20 نقطة
+  if (stock.volumeRatio >= 2.5) {
+    score += 20;
+    reasons.push("حجم التداول أعلى من المتوسط بقوة");
+  } else if (stock.volumeRatio >= 2) {
+    score += 15;
+  } else if (stock.volumeRatio >= 1.5) {
+    score += 8;
+  }
+
+  // الاختراق أو إعادة الاختبار — 20 نقطة
+  if (stock.breakout === "early") {
+    score += 20;
+    reasons.push("السهم في بداية اختراق وليس بعد اكتمال الحركة");
   } else if (stock.breakout === "retest") {
-    score += 14;
-    reasons.push("إعادة اختبار ناجحة");
+    score += 19;
+    reasons.push("إعادة اختبار ناجحة بعد الاختراق");
   } else if (stock.breakout === "late") {
-    score -= 20;
     reasons.push("الحركة متأخرة وقد أكمل السهم معظم صعوده");
   }
 
-  if (stock.resistanceDistancePct >= 4) {
+  // المسافة حتى المقاومة — 10 نقاط
+  if (stock.resistanceDistancePct >= 5) {
     score += 10;
-    reasons.push("مساحة صعود جيدة قبل المقاومة");
-  } else if (stock.resistanceDistancePct >= 2) {
-    score += 5;
+    reasons.push("مساحة صعود جيدة قبل المقاومة التالية");
+  } else if (stock.resistanceDistancePct >= 3.5) {
+    score += 6;
   }
 
+  // وقف الخسارة — 5 نقاط
   if (stock.stopDistancePct > 0 && stock.stopDistancePct <= 3) {
     score += 5;
-    reasons.push("وقف الخسارة الفني قريب ومنطقي");
+    reasons.push("وقف الخسارة الفني قريب ومناسب للمضاربة اليومية");
+  } else if (stock.stopDistancePct <= 4) {
+    score += 2;
   }
+
+  // استبعادات صارمة لاستراتيجية المضاربة اليومية
+  const hardReject =
+    stock.trend !== "up" ||
+    stock.macdSignal !== "bullish" ||
+    !["early", "retest"].includes(stock.breakout) ||
+    stock.rsi < 48 ||
+    stock.rsi > 70 ||
+    stock.volumeRatio < 1.5 ||
+    stock.resistanceDistancePct < 3.5 ||
+    stock.stopDistancePct > 4 ||
+    stock.changePct >= 12;
+
+  if (hardReject) score = Math.min(score, 94);
 
   score = Math.max(0, Math.min(100, score));
 
   return {
     score,
-    classification: score >= 88 ? "شراء مشروط" : score >= 72 ? "مراقبة" : "استبعاد",
+    classification: score >= 95 ? "فرصة مضاربة قوية" : "استبعاد",
     reasons,
   };
 }
