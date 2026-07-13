@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { GET as scanMarket } from "@/app/api/market/scan/route";
 import { positionSize, scoreMaherHero, StockSnapshot } from "@/lib/maherHero";
 
 const allocationWeights = [0.4, 0.35, 0.25];
@@ -123,6 +122,24 @@ async function sendPushNotification(plan: AlertPlan) {
   return response.json();
 }
 
+async function fetchLiveScan(request: Request) {
+  const scanUrl = new URL("/api/market/scan", request.url);
+  scanUrl.searchParams.set("source", "cron");
+
+  const response = await fetch(scanUrl, {
+    method: "GET",
+    headers: { "x-maher-hero-source": "cron" },
+    cache: "no-store",
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.mode !== "live") {
+    throw new Error(data.error || `تعذر فحص السوق الحقيقي (${response.status}).`);
+  }
+
+  return data as { mode: "live"; scanned: number; stocks: StockSnapshot[] };
+}
+
 export async function GET(request: Request) {
   if (!authorize(request)) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
@@ -139,18 +156,9 @@ export async function GET(request: Request) {
       });
     }
 
-    const scanRequest = new Request(new URL("/api/market/scan", request.url), {
-      method: "GET",
-      headers: { "x-maher-hero-source": "cron" },
-    });
-    const scanResponse = await scanMarket(scanRequest);
-    const scanData = await scanResponse.json();
+    const scanData = await fetchLiveScan(request);
 
-    if (!scanResponse.ok || scanData.mode !== "live") {
-      throw new Error(scanData.error || "تعذر فحص السوق الحقيقي.");
-    }
-
-    const qualified = (scanData.stocks as StockSnapshot[])
+    const qualified = scanData.stocks
       .map((stock) => ({ ...stock, ...scoreMaherHero(stock) }))
       .filter((stock) => stock.score >= 95)
       .sort((a, b) => b.score - a.score)
