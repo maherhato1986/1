@@ -28,13 +28,22 @@ export async function POST(request: Request) {
     const input = requestSchema.parse(await request.json());
     const ranked = input.stocks
       .map((stock) => ({ ...stock, ...scoreMaherHero(stock as StockSnapshot) }))
+      .filter((stock) => stock.score >= 95)
       .sort((a, b) => b.score - a.score)
       .slice(0, 3);
+
+    if (!ranked.length) {
+      return NextResponse.json({
+        mode: "local",
+        picks: [],
+        message: "لا توجد حاليًا فرصة مضاربة يومية تحقق تقييم ماهر هيرو 95/100 أو أعلى. الأفضل الانتظار وعدم الدخول.",
+      });
+    }
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({
         mode: "local",
-        message: "تم استخدام محرك ماهر هيرو المحلي. الشرح الذكي غير مفعّل لعدم توفر مفتاح OpenAI.",
+        message: "تم اعتماد الفرص التي تجاوزت 95/100 بواسطة محرك ماهر هيرو المحلي. الشرح الذكي غير مفعّل لعدم توفر مفتاح OpenAI.",
         picks: ranked,
       });
     }
@@ -46,7 +55,7 @@ export async function POST(request: Request) {
         input: [
           {
             role: "system",
-            content: "أنت محلل مساعد لاستراتيجية ماهر هيرو. حلل البيانات المقدمة فقط، لا تخترع أسعارًا أو أخبارًا، واجعل كل دخول مشروطًا بتأكيد السعر والحجم. وضح أن التحليل لا يضمن الربح.",
+            content: "أنت محلل مضاربة يومية لاستراتيجية ماهر هيرو. حلل فقط الأسهم التي حصلت على 95/100 أو أعلى. لا تخترع أسعارًا أو أخبارًا. لكل سهم وضح باختصار: سعر الدخول المشروط، وقف الخسارة، الهدف الأول للبيع في نفس اليوم، الهدف الثاني، سبب الاختيار، وشرط إلغاء الدخول إذا ضعف الحجم أو الزخم. وضح أن التنفيذ مشروط وليس ضمانًا للربح.",
           },
           {
             role: "user",
@@ -68,8 +77,8 @@ export async function POST(request: Request) {
         mode: "local-fallback",
         picks: ranked,
         message: quotaProblem
-          ? "تم عرض نتائج محرك ماهر هيرو المحلي. رصيد OpenAI API غير متاح حاليًا؛ فعّل الفوترة أو أضف رصيدًا لتشغيل الشرح الذكي."
-          : "تم عرض نتائج محرك ماهر هيرو المحلي لأن خدمة الشرح الذكي غير متاحة مؤقتًا.",
+          ? "تم عرض الفرص التي تجاوزت 95/100 بواسطة محرك ماهر هيرو المحلي. رصيد OpenAI API غير متاح حاليًا."
+          : "تم عرض الفرص التي تجاوزت 95/100 بواسطة محرك ماهر هيرو المحلي لأن خدمة الشرح الذكي غير متاحة مؤقتًا.",
       });
     }
   } catch (error) {
