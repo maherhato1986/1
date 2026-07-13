@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { positionSize, scoreMaherHero, StockSnapshot } from "@/lib/maherHero";
 
+export const dynamic = "force-dynamic";
+
 const allocationWeights = [0.4, 0.35, 0.25];
 
 function envNumber(name: string, fallback: number) {
@@ -90,28 +92,31 @@ async function sendPushNotification(plan: AlertPlan) {
     throw new Error("أضف NTFY_TOPIC في Vercel لتفعيل إشعارات الجوال.");
   }
 
-  const body = [
+  const message = [
     `السهم: ${plan.symbol}`,
     `التقييم: ${plan.score}/100`,
     `الدخول المشروط: $${plan.entry.toFixed(2)}`,
-    `الكمية: ${plan.quantity} سهم`,
+    `الكمية المقترحة: ${plan.quantity} سهم`,
     `قيمة الصفقة: $${plan.netAmount.toFixed(2)}`,
     `وقف الخسارة: $${plan.stop.toFixed(2)}`,
     `الهدف الأول: $${plan.target1.toFixed(2)}`,
     `الهدف الثاني: $${plan.target2.toFixed(2)}`,
-    "تحقق من السعر والحجم قبل التنفيذ.",
+    "تحقق من السعر والحجم لحظة التنفيذ؛ التنبيه ليس أمر شراء تلقائيًا.",
   ].join("\n");
 
-  const response = await fetch(`${server}/${encodeURIComponent(topic)}`, {
+  // إرسال JSON يمنع مشاكل ترميز العناوين العربية داخل HTTP headers.
+  const response = await fetch(server, {
     method: "POST",
-    headers: {
-      Title: `ماهر هيرو — فرصة ${plan.score}/100`,
-      Priority: plan.score >= 99 ? "urgent" : "high",
-      Tags: "chart_with_upwards_trend,rotating_light",
-      Click: siteUrl,
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-    body,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      topic,
+      title: `ماهر هيرو — فرصة ${plan.score}/100`,
+      message,
+      priority: plan.score >= 99 ? 5 : 4,
+      tags: ["chart_with_upwards_trend", "rotating_light"],
+      click: siteUrl,
+    }),
+    cache: "no-store",
   });
 
   if (!response.ok) {
