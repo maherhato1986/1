@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 export async function GET() {
   const topic = process.env.NTFY_TOPIC;
@@ -9,32 +10,61 @@ export async function GET() {
 
   if (!topic) {
     return NextResponse.json(
-      { ok: false, error: "NTFY_TOPIC غير موجود في Vercel." },
+      { ok: false, stage: "environment", error: "NTFY_TOPIC غير موجود في Vercel." },
       { status: 500 },
     );
   }
 
-  const response = await fetch(`${server}/${encodeURIComponent(topic)}`, {
-    method: "POST",
-    headers: {
-      Title: "اختبار ماهر هيرو",
-      Priority: "high",
-      Tags: "white_check_mark,chart_with_upwards_trend",
-      Click: siteUrl,
-      "Content-Type": "text/plain; charset=utf-8",
-    },
-    body: "تم نجاح اختبار تنبيه ماهر هيرو ✅\nإذا وصلتك هذه الرسالة فالإشعارات تعمل على جوالك.",
-    cache: "no-store",
-  });
+  try {
+    const response = await fetch(`${server}/${encodeURIComponent(topic)}`, {
+      method: "POST",
+      headers: {
+        Title: "اختبار ماهر هيرو",
+        Priority: "high",
+        Tags: "white_check_mark,chart_with_upwards_trend",
+        Click: siteUrl,
+        "Content-Type": "text/plain; charset=utf-8",
+      },
+      body: `تم نجاح اختبار تنبيه ماهر هيرو ✅\nوقت الاختبار: ${new Date().toISOString()}\nإذا وصلتك هذه الرسالة فالإشعارات تعمل على جوالك.`,
+      cache: "no-store",
+    });
 
-  if (!response.ok) {
     const details = await response.text();
+
+    if (!response.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          stage: "ntfy",
+          status: response.status,
+          error: details.slice(0, 500),
+        },
+        { status: 502 },
+      );
+    }
+
+    let result: unknown = details;
+    try {
+      result = JSON.parse(details);
+    } catch {
+      // ntfy may return plain text in some configurations.
+    }
+
+    return NextResponse.json({
+      ok: true,
+      channel: "ntfy",
+      topicConfigured: true,
+      server,
+      result,
+    });
+  } catch (error) {
     return NextResponse.json(
-      { ok: false, status: response.status, error: details.slice(0, 300) },
+      {
+        ok: false,
+        stage: "network",
+        error: error instanceof Error ? error.message : "فشل غير معروف أثناء إرسال التنبيه.",
+      },
       { status: 502 },
     );
   }
-
-  const result = await response.json();
-  return NextResponse.json({ ok: true, channel: "ntfy", result });
 }
