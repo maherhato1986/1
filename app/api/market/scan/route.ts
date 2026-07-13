@@ -88,7 +88,7 @@ function buildSnapshot(symbol: string, bars: Bar[], screener?: ScreenerItem): St
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const authHeaders = headers();
   if (!authHeaders) {
     return NextResponse.json({
@@ -109,10 +109,14 @@ export async function GET() {
     for (const item of candidates) {
       if (item.symbol && !bySymbol.has(item.symbol)) bySymbol.set(item.symbol, item);
     }
-    const symbols = Array.from(bySymbol.keys()).slice(0, 40);
+
+    // Keep the batch small enough for Alpaca's 10,000-bar response limit.
+    const symbols = Array.from(bySymbol.keys()).slice(0, 30);
     if (!symbols.length) throw new Error("لم يرجع مزود السوق أسهمًا مرشحة حاليًا.");
 
-    const start = new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString();
+    // A 12-hour window becomes empty on weekends and before the US session.
+    // Four calendar days normally include at least one full trading session.
+    const start = new Date(Date.now() - 1000 * 60 * 60 * 24 * 4).toISOString();
     const barsUrl = new URL(`${baseUrl}/v2/stocks/bars`);
     barsUrl.searchParams.set("symbols", symbols.join(","));
     barsUrl.searchParams.set("timeframe", "5Min");
@@ -122,18 +126,36 @@ export async function GET() {
     barsUrl.searchParams.set("feed", "iex");
 
     const barsData = await fetchJson<BarsResponse>(barsUrl.toString(), authHeaders);
-    const stocks = symbols
+    const snapshots = symbols
       .map((symbol) => buildSnapshot(symbol, barsData.bars?.[symbol] ?? [], bySymbol.get(symbol)))
-      .filter((stock): stock is StockSnapshot => Boolean(stock))
-      .filter((stock) => stock.volumeRatio >= 0.8 && stock.changePct > -3)
+      .filter((stock): stock is StockSnapshot => Boolean(stock));
+
+    // Do not discard every real symbol merely because the latest 5-minute candle
+    // has below-average volume outside regular market hours. Ranking happens later.
+    const stocks = snapshots
+      .filter((stock) => stock.changePct > -10)
+      .sort((a, b) => b.volumeRatio - a.volumeRatio)
       .slice(0, 30);
 
+    const debug = new URL(request.url).searchParams.get("debug") === "1";
     return NextResponse.json({
       mode: "live",
       provider: "alpaca",
       scanned: symbols.length,
       stocks,
       timestamp: new Date().toISOString(),
+      ...(debug
+        ? {
+            diagnostics: {
+              candidateCount: candidates.length,
+              symbolsRequested: symbols.length,
+              symbolsWithBars: Object.keys(barsData.bars ?? {}).length,
+              snapshotsBuilt: snapshots.length,
+              start,
+              nextPageToken: barsData.next_page_token ?? null,
+            },
+          }
+        : {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "تعذر فحص السوق";
