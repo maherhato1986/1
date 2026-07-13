@@ -16,24 +16,50 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify deploy hook secret
+      - name: Validate Vercel deploy hook
         shell: bash
         env:
           VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
         run: |
-          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
-            echo "VERCEL_DEPLOY_HOOK_URL is not configured in GitHub Actions secrets."
-            echo "Create a Vercel Deploy Hook for branch main, then save it as this repository secret."
+          set -euo pipefail
+          if [ -z "${VERCEL_DEPLOY_HOOK_URL:-}" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL is not configured."
+            exit 1
+          fi
+          case "$VERCEL_DEPLOY_HOOK_URL" in
+            https://api.vercel.com/v1/integrations/deploy/*) ;;
+            *)
+              echo "The saved secret is not a Vercel Deploy Hook URL."
+              echo "Expected it to start with: https://api.vercel.com/v1/integrations/deploy/"
+              exit 1
+              ;;
+          esac
+
+      - name: Trigger latest main deployment
+        shell: bash
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          response_file="$(mktemp)"
+          http_code=$(curl --silent --show-error \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            --request POST \
+            "$VERCEL_DEPLOY_HOOK_URL")
+
+          echo "Vercel response status: $http_code"
+          cat "$response_file"
+          echo
+
+          if [ "$http_code" -lt 200 ] || [ "$http_code" -ge 300 ]; then
+            echo "Vercel rejected the deploy hook request."
             exit 1
           fi
 
-      - name: Trigger Vercel production deployment
-        shell: bash
-        env:
-          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
-        run: |
-          curl --fail --show-error --silent \
-            --request POST \
-            "$VERCEL_DEPLOY_HOOK_URL"
-          echo
-          echo "Vercel deployment triggered for the latest main commit."
+          if ! grep -Eq '"job"|"id"|"url"' "$response_file"; then
+            echo "The URL returned a successful HTTP response, but it does not look like a Vercel deploy-hook response."
+            exit 1
+          fi
+
+          echo "Vercel accepted a deployment request for the main branch."
