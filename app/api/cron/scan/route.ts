@@ -75,55 +75,42 @@ function buildPlan(stock: StockSnapshot & { score: number }, index: number): Ale
   };
 }
 
-async function sendWhatsAppTemplate(plan: AlertPlan) {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const to = process.env.WHATSAPP_TO;
-  const templateName = process.env.WHATSAPP_TEMPLATE_NAME || "maher_hero_alert";
-  const languageCode = process.env.WHATSAPP_TEMPLATE_LANG || "ar";
-  const graphVersion = process.env.WHATSAPP_GRAPH_VERSION || "v23.0";
+async function sendPushNotification(plan: AlertPlan) {
+  const topic = process.env.NTFY_TOPIC;
+  const server = (process.env.NTFY_SERVER || "https://ntfy.sh").replace(/\/$/, "");
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://1-ten-sage-17.vercel.app";
 
-  if (!token || !phoneNumberId || !to) {
-    throw new Error("متغيرات WhatsApp غير مكتملة في Vercel.");
+  if (!topic) {
+    throw new Error("أضف NTFY_TOPIC في Vercel لتفعيل إشعارات الجوال.");
   }
 
-  const values = [
-    plan.symbol,
-    String(plan.score),
-    plan.entry.toFixed(2),
-    String(plan.quantity),
-    plan.netAmount.toFixed(2),
-    plan.stop.toFixed(2),
-    plan.target1.toFixed(2),
-    plan.target2.toFixed(2),
-  ];
+  const body = [
+    `السهم: ${plan.symbol}`,
+    `التقييم: ${plan.score}/100`,
+    `الدخول المشروط: $${plan.entry.toFixed(2)}`,
+    `الكمية: ${plan.quantity} سهم`,
+    `قيمة الصفقة: $${plan.netAmount.toFixed(2)}`,
+    `وقف الخسارة: $${plan.stop.toFixed(2)}`,
+    `الهدف الأول: $${plan.target1.toFixed(2)}`,
+    `الهدف الثاني: $${plan.target2.toFixed(2)}`,
+    "تحقق من السعر والحجم قبل التنفيذ.",
+  ].join("\n");
 
-  const response = await fetch(`https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`, {
+  const response = await fetch(`${server}/${encodeURIComponent(topic)}`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+      Title: `ماهر هيرو — فرصة ${plan.score}/100`,
+      Priority: plan.score >= 99 ? "urgent" : "high",
+      Tags: "chart_with_upwards_trend,rotating_light",
+      Click: siteUrl,
+      "Content-Type": "text/plain; charset=utf-8",
     },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components: [
-          {
-            type: "body",
-            parameters: values.map((text) => ({ type: "text", text })),
-          },
-        ],
-      },
-    }),
+    body,
   });
 
   if (!response.ok) {
     const details = await response.text();
-    throw new Error(`فشل إرسال WhatsApp (${response.status}): ${details.slice(0, 300)}`);
+    throw new Error(`فشل إرسال إشعار Push (${response.status}): ${details.slice(0, 300)}`);
   }
 
   return response.json();
@@ -174,7 +161,7 @@ export async function GET(request: Request) {
 
     const sent = [];
     for (const plan of plans) {
-      await sendWhatsAppTemplate(plan);
+      await sendPushNotification(plan);
       sent.push(plan);
     }
 
@@ -184,6 +171,7 @@ export async function GET(request: Request) {
       scanned: scanData.scanned,
       alerted: sent.length,
       alerts: sent,
+      channel: "ntfy",
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
