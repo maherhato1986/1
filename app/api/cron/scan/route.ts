@@ -132,7 +132,9 @@ export async function GET(request: Request) {
       });
     }
 
-    const scanResponse = await scanMarket();
+   const scanResponse = await scanMarket(
+  new Request("http://localhost/api/market/scan")
+);
     const scanData = await scanResponse.json();
 
     if (!scanResponse.ok || scanData.mode !== "live") {
