@@ -1,4 +1,4 @@
-name: Deploy Maher Hero Demo
+name: Deploy Maher Hero to Vercel
 
 on:
   push:
@@ -7,32 +7,33 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: vercel-production
   cancel-in-progress: true
 
 jobs:
   deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-      - name: Prepare static site
+      - name: Verify deploy hook secret
+        shell: bash
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
         run: |
-          mkdir -p _site
-          cp index.html _site/index.html
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - name: Deploy
-        id: deployment
-        uses: actions/deploy-pages@v4
+          if [ -z "$VERCEL_DEPLOY_HOOK_URL" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL is not configured in GitHub Actions secrets."
+            echo "Create a Vercel Deploy Hook for branch main, then save it as this repository secret."
+            exit 1
+          fi
+
+      - name: Trigger Vercel production deployment
+        shell: bash
+        env:
+          VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          curl --fail --show-error --silent \
+            --request POST \
+            "$VERCEL_DEPLOY_HOOK_URL"
+          echo
+          echo "Vercel deployment triggered for the latest main commit."
