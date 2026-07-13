@@ -1,0 +1,2 @@
+Force Vercel production deployment for Saudi scanner.
+Commit includes all changes through f92b29f.
