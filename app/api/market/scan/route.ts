@@ -109,7 +109,7 @@ export async function GET() {
     for (const item of candidates) {
       if (item.symbol && !bySymbol.has(item.symbol)) bySymbol.set(item.symbol, item);
     }
-    const symbols = [...bySymbol.keys()].slice(0, 40);
+    const symbols = Array.from(bySymbol.keys()).slice(0, 40);
     if (!symbols.length) throw new Error("لم يرجع مزود السوق أسهمًا مرشحة حاليًا.");
 
     const start = new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString();
