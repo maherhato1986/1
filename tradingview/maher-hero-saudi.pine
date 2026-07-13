@@ -1,0 +1,50 @@
+//@version=6
+indicator("Maher Hero Saudi Alerts", overlay=true, max_labels_count=100)
+
+minScore = input.int(95, "Minimum score", minval=80, maxval=100)
+secret = input.string("CHANGE_ME", "Webhook secret")
+
+rsiValue = ta.rsi(close, 14)
+ema20 = ta.ema(close, 20)
+[macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
+volumeAverage = ta.sma(volume, 20)
+volumeRatio = volumeAverage > 0 ? volume / volumeAverage : 0.0
+atrValue = ta.atr(14)
+stopDistancePct = close > 0 ? atrValue / close * 100 * 1.25 : 0.0
+
+priorResistance = ta.highest(high[1], 20)
+nextResistance = ta.highest(high[1], 100)
+earlyBreakout = close > priorResistance and close[1] <= priorResistance and (close / close[1] - 1) * 100 < 8
+retest = low <= priorResistance * 1.006 and close >= priorResistance and close[1] > priorResistance
+lateMove = (close / close[1] - 1) * 100 >= 12
+resistanceDistancePct = nextResistance > close ? (nextResistance - close) / close * 100 : 5.0
+trendUp = close > ema20 * 1.004
+macdBullish = macdLine > signalLine
+
+score = 0
+score += trendUp ? 15 : 0
+score += macdBullish ? 15 : 0
+score += rsiValue >= 52 and rsiValue <= 66 ? 15 : rsiValue >= 48 and rsiValue <= 70 ? 8 : 0
+score += volumeRatio >= 2.5 ? 20 : volumeRatio >= 2 ? 15 : volumeRatio >= 1.5 ? 8 : 0
+score += earlyBreakout ? 20 : retest ? 19 : 0
+score += resistanceDistancePct >= 5 ? 10 : resistanceDistancePct >= 3.5 ? 6 : 0
+score += stopDistancePct > 0 and stopDistancePct <= 3 ? 5 : stopDistancePct <= 4 ? 2 : 0
+
+hardReject = not trendUp or not macdBullish or not (earlyBreakout or retest) or rsiValue < 48 or rsiValue > 70 or volumeRatio < 1.5 or resistanceDistancePct < 3.5 or stopDistancePct > 4 or lateMove
+finalScore = hardReject ? math.min(score, 94) : math.min(score, 100)
+
+stopPrice = close * (1 - stopDistancePct / 100)
+target1 = close * (1 + math.max(0.025, stopDistancePct / 100 * 1.25))
+target2 = close * (1 + math.max(0.045, stopDistancePct / 100 * 2))
+signalName = earlyBreakout ? "اختراق مبكر" : retest ? "إعادة اختبار" : "مراقبة"
+
+qualified = barstate.isconfirmed and finalScore >= minScore
+newSignal = qualified and not qualified[1]
+
+plot(ema20, "EMA 20")
+plot(priorResistance, "Resistance", style=plot.style_linebr)
+plotshape(newSignal, title="Maher Hero signal", style=shape.labelup, location=location.belowbar, text="HERO")
+
+if newSignal
+    payload = '{"secret":"' + secret + '","market":"SA","symbol":"' + syminfo.tickerid + '","name":"' + syminfo.description + '","timeframe":"' + timeframe.period + '","score":' + str.tostring(finalScore) + ',"price":' + str.tostring(close) + ',"stop":' + str.tostring(stopPrice) + ',"target1":' + str.tostring(target1) + ',"target2":' + str.tostring(target2) + ',"rsi":' + str.tostring(rsiValue) + ',"volumeRatio":' + str.tostring(volumeRatio) + ',"signal":"' + signalName + '","timestamp":"' + str.tostring(time) + '"}'
+    alert(payload, alert.freq_once_per_bar_close)
