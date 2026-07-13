@@ -19,6 +19,7 @@ function alpacaHeaders() {
   const key = process.env.ALPACA_API_KEY;
   const secret = process.env.ALPACA_API_SECRET;
   if (!key || !secret) return null;
+
   return {
     "APCA-API-KEY-ID": key,
     "APCA-API-SECRET-KEY": secret,
@@ -27,7 +28,9 @@ function alpacaHeaders() {
 
 async function isUsMarketOpen() {
   const headers = alpacaHeaders();
-  if (!headers) return false;
+  if (!headers) {
+    throw new Error("متغيرات Alpaca غير مكتملة في Vercel.");
+  }
 
   const baseUrl = process.env.ALPACA_BASE_URL || "https://paper-api.alpaca.markets";
   const response = await fetch(`${baseUrl}/v2/clock`, {
@@ -35,7 +38,11 @@ async function isUsMarketOpen() {
     cache: "no-store",
   });
 
-  if (!response.ok) return false;
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`تعذر قراءة حالة السوق من Alpaca (${response.status}): ${details.slice(0, 200)}`);
+  }
+
   const clock = (await response.json()) as { is_open?: boolean };
   return Boolean(clock.is_open);
 }
@@ -132,9 +139,11 @@ export async function GET(request: Request) {
       });
     }
 
-   const scanResponse = await scanMarket(
-  new Request("http://localhost/api/market/scan")
-);
+    const scanRequest = new Request(new URL("/api/market/scan", request.url), {
+      method: "GET",
+      headers: { "x-maher-hero-source": "cron" },
+    });
+    const scanResponse = await scanMarket(scanRequest);
     const scanData = await scanResponse.json();
 
     if (!scanResponse.ok || scanData.mode !== "live") {
@@ -161,18 +170,23 @@ export async function GET(request: Request) {
       .map((stock, index) => buildPlan(stock, index))
       .filter((plan) => plan.quantity > 0);
 
-    const sent = [];
-    for (const plan of plans) {
-      await sendPushNotification(plan);
-      sent.push(plan);
-    }
+    const results = await Promise.allSettled(plans.map((plan) => sendPushNotification(plan)));
+    const sent = plans.filter((_, index) => results[index]?.status === "fulfilled");
+    const failed = results
+      .map((result, index) =>
+        result.status === "rejected"
+          ? { symbol: plans[index].symbol, error: String(result.reason) }
+          : null,
+      )
+      .filter(Boolean);
 
     return NextResponse.json({
-      ok: true,
+      ok: failed.length === 0,
       marketOpen: true,
       scanned: scanData.scanned,
       alerted: sent.length,
       alerts: sent,
+      failed,
       channel: "ntfy",
       timestamp: new Date().toISOString(),
     });
