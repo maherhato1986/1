@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./portfolio.css";
+import "./portfolio-table.css";
 
 export const metadata: Metadata = {
   title: "ماهر هيرو | محلل الأسهم الذكي",
