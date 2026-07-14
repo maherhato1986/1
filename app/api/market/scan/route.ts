@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { Bar, completedBars, macdSignal, rsi, sma, trueRangeAverage } from "@/lib/indicators";
 import { StockSnapshot } from "@/lib/maherHero";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 type ScreenerItem = {
   symbol: string;
   percent_change?: number;
@@ -23,9 +27,14 @@ function headers() {
 
 async function fetchJson<T>(url: string, authHeaders: Record<string, string>): Promise<T> {
   const response = await fetch(url, { headers: authHeaders, cache: "no-store", signal: AbortSignal.timeout(15000) });
+  const contentType = response.headers.get("content-type") || "";
   if (!response.ok) {
     const details = await response.text();
     throw new Error(`تعذر جلب بيانات السوق (${response.status}): ${details.slice(0, 180)}`);
+  }
+  if (!contentType.includes("application/json")) {
+    const details = await response.text();
+    throw new Error(`مزود السوق أعاد استجابة غير صالحة: ${details.slice(0, 120)}`);
   }
   return response.json() as Promise<T>;
 }
