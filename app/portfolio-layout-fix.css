@@ -1,0 +1,36 @@
+/* Fix portfolio table column alignment after removing the source column */
+@media (min-width: 901px) {
+  .broker-table { overflow-x: auto; overflow-y: hidden; }
+  .broker-head,
+  .broker-row {
+    grid-template-columns: 92px 62px 112px 108px 116px 190px 118px minmax(230px,1fr) 150px 112px 238px;
+    min-width: 1540px;
+    column-gap: 10px;
+  }
+  .broker-head > span:nth-child(11),
+  .broker-row > .source-cell { display: none !important; }
+  .broker-head > span:nth-child(12) { grid-column: 11; }
+  .broker-row > .row-actions { grid-column: 11; }
+  .row-actions {
+    display: grid;
+    grid-template-columns: minmax(72px,1fr) minmax(82px,1fr) 64px;
+    gap: 7px;
+    width: 100%;
+    min-width: 0;
+  }
+  .row-actions button {
+    min-width: 0;
+    width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .advice-cell { min-width: 0; }
+  .broker-row > span,
+  .broker-row > div { min-width: 0; }
+}
+
+@media (max-width: 900px) {
+  .broker-row > .source-cell { display: none !important; }
+  .row-actions { grid-column: 1 / -1; }
+}
