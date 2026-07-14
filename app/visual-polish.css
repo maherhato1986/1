@@ -1,0 +1,98 @@
+/* Visual polish for Maher Hero portfolio */
+:root{
+  --mh-bg:#06111d;
+  --mh-panel:#0b1d2d;
+  --mh-panel-2:#10263a;
+  --mh-border:#244964;
+  --mh-text:#f3f8fc;
+  --mh-muted:#8fa7bb;
+  --mh-green:#35d39a;
+  --mh-red:#ff6f88;
+  --mh-amber:#f2bd55;
+  --mh-blue:#6ec8ff;
+}
+html,body,button,input,select{font-family:"Segoe UI",Tahoma,Arial,sans-serif}
+body{color:var(--mh-text);background:linear-gradient(180deg,#071521 0%,#040b13 100%)}
+
+/* clearer page hierarchy */
+.topbar{border-bottom-color:rgba(83,139,177,.28)}
+.brand{font-size:1rem;letter-spacing:1.8px}
+.compact-hero h1{font-weight:900;letter-spacing:-.6px}
+.portfolio-actions h2{font-weight:900;color:#fff}
+.portfolio-actions p{font-size:.92rem;color:#9bb0c2}
+
+/* summary cards */
+.portfolio-summary article{
+  background:linear-gradient(145deg,#10283d,#0a1b2b);
+  border-color:#2b526e;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025),0 10px 28px rgba(0,0,0,.18);
+}
+.portfolio-summary span{font-size:.82rem;font-weight:700;color:#9ab0c2}
+.portfolio-summary strong{font-size:1.42rem;font-weight:900}
+.positive{color:var(--mh-green)!important}
+.negative{color:var(--mh-red)!important}
+
+/* table surface */
+.broker-table{
+  border:1px solid #2b526e;
+  background:#07131f;
+  box-shadow:0 18px 44px rgba(0,0,0,.24);
+}
+.broker-head{
+  background:linear-gradient(180deg,#16344d,#10283c);
+  color:#b7c8d6;
+  font-size:.78rem;
+  letter-spacing:.15px;
+  border-bottom:1px solid #3b6683;
+}
+.broker-head span{font-weight:900}
+.broker-row:nth-child(odd){background:#071522}
+.broker-row:nth-child(even){background:#091a29}
+.broker-row:hover{background:#0e2639}
+.broker-row{border-bottom-color:#1c3b51}
+.broker-row>span,.broker-row>div{font-size:.86rem}
+.symbol-cell strong{font-size:1.18rem;letter-spacing:.35px;color:#fff}
+.symbol-cell small{color:#7f9aaf}
+.price-cell{color:#fff;font-size:1rem;font-weight:900}
+.broker-row b{font-weight:900}
+.broker-row small{font-size:.7rem}
+
+/* separate numeric focus */
+.broker-row>span:nth-child(3),
+.broker-row>span:nth-child(4),
+.broker-row>span:nth-child(5),
+.broker-row>span:nth-child(6),
+.broker-row>span:nth-child(7),
+.broker-row>span:nth-child(10),
+.broker-row>span:nth-child(11){font-variant-numeric:tabular-nums}
+
+/* statuses and advice */
+.status{font-size:.72rem;font-weight:900;padding:7px 11px}
+.status.safe{background:rgba(53,211,154,.12);color:#6ee9b8;border-color:rgba(53,211,154,.36)}
+.status.warning{background:rgba(242,189,85,.12);color:#ffd879;border-color:rgba(242,189,85,.38)}
+.status.danger{background:rgba(255,111,136,.11);color:#ff9db0;border-color:rgba(255,111,136,.42)}
+.advice-cell{font-size:.76rem;font-weight:700;line-height:1.65;background:#0d2132}
+.advice-cell.safe{color:#c8f4e2;background:rgba(26,89,70,.2)}
+.advice-cell.warning{color:#ffe2a3;background:rgba(102,76,24,.19)}
+.advice-cell.danger{color:#ffc0cc;background:rgba(104,32,48,.2)}
+
+/* action buttons */
+.row-actions button{border-radius:9px;font-weight:900;box-shadow:none}
+.row-actions button:first-child{background:linear-gradient(90deg,#21ad78,#31ce91);color:#fff}
+.row-actions .secondary-button{background:#12314a;border-color:#386582;color:#d8ebf8}
+.row-actions .danger-button{background:#4a1d2a;border-color:#87394d;color:#ffb0bf}
+.row-actions button:hover{transform:none;filter:brightness(1.12)}
+
+/* scrollbar */
+.broker-table::-webkit-scrollbar{height:10px}
+.broker-table::-webkit-scrollbar-track{background:#07131f}
+.broker-table::-webkit-scrollbar-thumb{background:#315875;border-radius:999px;border:2px solid #07131f}
+
+/* mobile cards */
+@media(max-width:900px){
+  .broker-row{background:linear-gradient(145deg,#0c2032,#07131f)!important;box-shadow:0 10px 26px rgba(0,0,0,.18)}
+  .broker-row>span,.broker-row>div{background:#081724;border-color:#21445d}
+  .symbol-cell strong{font-size:1.55rem}
+  .broker-row>span:before{font-weight:800;color:#91aabd}
+  .advice-cell{font-size:.82rem}
+}
