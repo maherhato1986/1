@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { scoreMaherHero, StockSnapshot } from "@/lib/maherHero";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const requestSchema = z.object({
   market: z.enum(["US", "SA"]),
   capital: z.number().min(100).max(10_000_000),
@@ -14,6 +18,15 @@ const RATE_LIMIT_MS = 30_000;
 
 function clientKey(request: Request) {
   return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "anonymous";
+}
+
+async function readJsonResponse(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    throw new Error(`خدمة الفحص أعادت صفحة غير صالحة بدل البيانات (${response.status}). ${text.slice(0, 100)}`);
+  }
+  return response.json();
 }
 
 export async function POST(request: Request) {
@@ -29,8 +42,12 @@ export async function POST(request: Request) {
     const input = requestSchema.parse(await request.json());
     const origin = new URL(request.url).origin;
     const scanPath = input.market === "US" ? "/api/market/scan" : "/api/saudi/scan?limit=180";
-    const marketResponse = await fetch(`${origin}${scanPath}`, { cache: "no-store", signal: AbortSignal.timeout(55_000) });
-    const marketData = await marketResponse.json();
+    const marketResponse = await fetch(`${origin}${scanPath}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(50_000),
+      headers: { "x-maher-hero-source": "analysis" },
+    });
+    const marketData = await readJsonResponse(marketResponse);
     if (!marketResponse.ok || marketData.mode !== "live") {
       throw new Error(marketData.error || marketData.errors?.[0] || "تعذر جلب بيانات السوق الحقيقية");
     }
@@ -79,11 +96,20 @@ export async function POST(request: Request) {
         ],
       });
       return NextResponse.json({ mode: "openai", provider: marketData.provider, scanned: marketData.scanned, picks, watchlist, narrative: response.output_text, warning: marketData.warning });
-    } catch {
-      return NextResponse.json({ mode: "local-fallback", provider: marketData.provider, scanned: marketData.scanned, picks, watchlist, message: "تم عرض النتائج المحلية لأن خدمة الشرح الذكي غير متاحة مؤقتًا.", warning: marketData.warning });
+    } catch (openAIError) {
+      const details = openAIError instanceof Error ? openAIError.message : "تعذر الاتصال بخدمة OpenAI";
+      return NextResponse.json({
+        mode: "local-fallback",
+        provider: marketData.provider,
+        scanned: marketData.scanned,
+        picks,
+        watchlist,
+        message: `تم عرض النتائج المحلية لأن الشرح الذكي غير متاح مؤقتًا. ${details.slice(0, 140)}`,
+        warning: marketData.warning,
+      });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "تعذر تحليل البيانات";
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
