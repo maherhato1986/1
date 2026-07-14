@@ -3,6 +3,7 @@ import "./globals.css";
 import "./portfolio.css";
 import "./portfolio-table.css";
 import "./portfolio-layout-fix.css";
+import "./visual-polish.css";
 
 export const metadata: Metadata = {
   title: "ماهر هيرو | محلل الأسهم الذكي",
