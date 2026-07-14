@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 
-type StockInput = {
+type Pick = {
   symbol: string;
   name: string;
   market: "US" | "SA";
@@ -15,19 +15,12 @@ type StockInput = {
   breakout: "early" | "retest" | "late" | "none";
   resistanceDistancePct: number;
   stopDistancePct: number;
-};
-
-type Pick = StockInput & {
   score: number;
   classification: string;
   reasons: string[];
+  warnings?: string[];
+  breakdown?: Record<string, number>;
 };
-
-const demoStocks: StockInput[] = [
-  { symbol: "HERO", name: "فرصة تجريبية للعرض", market: "US", price: 8.4, changePct: 3.2, volumeRatio: 2.7, rsi: 61, macdSignal: "bullish", trend: "up", breakout: "early", resistanceDistancePct: 6.2, stopDistancePct: 2.2 },
-  { symbol: "MHR", name: "إعادة اختبار تجريبية", market: "US", price: 15.2, changePct: 2.1, volumeRatio: 2.1, rsi: 57, macdSignal: "bullish", trend: "up", breakout: "retest", resistanceDistancePct: 5.1, stopDistancePct: 2.5 },
-  { symbol: "AIH", name: "حركة تجريبية نشطة", market: "US", price: 4.75, changePct: 4.5, volumeRatio: 1.8, rsi: 64, macdSignal: "bullish", trend: "up", breakout: "early", resistanceDistancePct: 4.4, stopDistancePct: 2.9 },
-];
 
 export default function Home() {
   const [market, setMarket] = useState<"US" | "SA">("US");
@@ -35,11 +28,13 @@ export default function Home() {
   const [riskPct, setRiskPct] = useState(1);
   const [loading, setLoading] = useState(false);
   const [picks, setPicks] = useState<Pick[]>([]);
+  const [watchlist, setWatchlist] = useState<Pick[]>([]);
   const [narrative, setNarrative] = useState("");
+  const [warning, setWarning] = useState("");
   const [error, setError] = useState("");
   const [lastScan, setLastScan] = useState("لم يبدأ الفحص بعد");
-  const [dataMode, setDataMode] = useState<"demo" | "live">("demo");
   const [scanned, setScanned] = useState(0);
+  const [provider, setProvider] = useState("");
 
   const currency = market === "US" ? "$" : "ر.س";
   const tradableCapital = useMemo(() => capital * 0.9, [capital]);
@@ -48,39 +43,24 @@ export default function Home() {
   async function analyze() {
     setLoading(true);
     setError("");
+    setWarning("");
     setNarrative("");
     setPicks([]);
+    setWatchlist([]);
     try {
-      let stocks: StockInput[] = demoStocks.map((stock) => ({ ...stock, market }));
-      let currentMode: "demo" | "live" = "demo";
-      let scannedCount = stocks.length;
-
-      if (market === "US") {
-        const marketResponse = await fetch("/api/market/scan", { cache: "no-store" });
-        const marketData = await marketResponse.json();
-        if (marketResponse.ok && marketData.mode === "live" && marketData.stocks?.length) {
-          stocks = marketData.stocks;
-          currentMode = "live";
-          scannedCount = marketData.scanned ?? stocks.length;
-        } else if (marketData.error) {
-          setError(`${marketData.error} تم تشغيل العرض التجريبي مؤقتًا.`);
-        }
-      } else {
-        setError("ربط السوق السعودي قيد التجهيز؛ تم تشغيل العرض التجريبي مؤقتًا.");
-      }
-
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ market, capital, riskPct, stocks }),
+        body: JSON.stringify({ market, capital, riskPct }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "تعذر التحليل");
-
       setPicks(data.picks || []);
+      setWatchlist(data.watchlist || []);
       setNarrative(data.narrative || data.message || "");
-      setDataMode(currentMode);
-      setScanned(scannedCount);
+      setWarning(data.warning || "");
+      setScanned(data.scanned || 0);
+      setProvider(data.provider || "");
       setLastScan(new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "حدث خطأ غير متوقع");
@@ -93,14 +73,14 @@ export default function Home() {
     <main>
       <nav className="topbar">
         <div className="brand">MAHER HERO <span>AI</span></div>
-        <div className={`live ${dataMode === "live" ? "is-live" : ""}`}><i /> {dataMode === "live" ? "بيانات سوق حقيقية" : "وضع تجريبي"}</div>
+        <div className={`live ${provider ? "is-live" : ""}`}><i /> {provider ? `بيانات حقيقية — ${provider}` : "جاهز للفحص"}</div>
       </nav>
 
       <header className="hero">
         <div>
-          <div className="badge">Maher Hero AI — v1.1</div>
+          <div className="badge">Maher Hero AI — v2.0</div>
           <h1>غرفة عمليات الأسهم الذكية</h1>
-          <p>فلترة السوق، تقييم الفرص من 100، إدارة رأس المال، وتحديد الدخول والوقف والأهداف قبل التنفيذ.</p>
+          <p>فلترة السوق، تقييم الفرص، إدارة رأس المال، وتحديد الدخول والوقف والأهداف قبل التنفيذ.</p>
         </div>
         <aside className="market-box">
           <span>حالة النظام</span>
@@ -125,7 +105,7 @@ export default function Home() {
         <button onClick={analyze} disabled={loading}>{loading ? "جارٍ فحص السوق..." : "ابدأ فحص ماهر هيرو"}</button>
       </section>
 
-      {loading && <section className="scanner panel"><div className="scan-head"><strong>جارٍ تحليل {marketLabel}</strong><span>MACD • RSI • الحجم • الاختراق</span></div><div className="progress"><b /></div><p>يتم الآن استبعاد الأسهم المتأخرة وضعيفة السيولة...</p></section>}
+      {loading && <section className="scanner panel"><div className="scan-head"><strong>جارٍ تحليل {marketLabel}</strong><span>MACD • RSI • RVOL • الاختراق • المخاطرة</span></div><div className="progress"><b /></div><p>يتم استبعاد الشموع غير المكتملة والأسهم المتأخرة وضعيفة السيولة...</p></section>}
 
       <section className="summary">
         <article><span>رأس المال</span><strong>{capital.toLocaleString()} {currency}</strong></article>
@@ -135,20 +115,22 @@ export default function Home() {
       </section>
 
       {error && <p className="error">{error}</p>}
-      {narrative && <section className="panel narrative"><div className="section-title"><span>قراءة ماهر هيرو</span><small>{dataMode === "live" ? "تحليل بيانات السوق الحقيقية" : "تحليل العرض التجريبي"}</small></div><p>{narrative}</p></section>}
+      {warning && <p className="error">تنبيه البيانات: {warning}</p>}
+      {narrative && <section className="panel narrative"><div className="section-title"><span>قراءة ماهر هيرو</span><small>تحليل خادمي موثوق</small></div><p>{narrative}</p></section>}
 
-      <section className="section-title opportunities"><span>أفضل الفرص الحالية</span><small>{picks.length ? `تم اختيار ${picks.length} أسهم` : "اضغط الفحص لإظهار النتائج"}</small></section>
-
+      <section className="section-title opportunities"><span>أفضل الفرص الحالية</span><small>{picks.length ? `تم اختيار ${picks.length} أسهم` : "لا توجد فرصة مؤكدة حتى الآن"}</small></section>
       <section className="cards">
         {picks.map((pick, index) => {
-          const allocation = tradableCapital * [0.4, 0.35, 0.25][index];
+          const allocation = tradableCapital * ([0.4, 0.35, 0.25][index] ?? 0.25);
           const stop = pick.price * (1 - pick.stopDistancePct / 100);
-          const target1 = pick.price * (1 + Math.max(0.025, pick.stopDistancePct * 1.25 / 100));
-          const target2 = pick.price * (1 + Math.max(0.045, pick.stopDistancePct * 2 / 100));
           const riskPerShare = Math.max(0.01, pick.price - stop);
           const maxRisk = capital * riskPct / 100;
           const quantity = Math.max(0, Math.min(Math.floor(allocation / pick.price), Math.floor(maxRisk / riskPerShare)));
           const used = quantity * pick.price;
+          const oneR = pick.price + riskPerShare;
+          const technicalTarget = pick.price * (1 + Math.max(0, pick.resistanceDistancePct) / 100);
+          const target1 = Math.min(technicalTarget, oneR);
+          const target2 = Math.min(technicalTarget, pick.price + riskPerShare * 2);
           return (
             <article className="stock-card" key={pick.symbol}>
               <div className="card-top"><div className="rank">الفرصة #{index + 1}</div><div className="score">{pick.score}<small>/100</small></div></div>
@@ -156,30 +138,31 @@ export default function Home() {
               <p>{pick.name}</p>
               <div className="status">{pick.classification}</div>
               <div className="trade-grid">
-                <div><span>السعر/الدخول المشروط</span><strong>{pick.price.toFixed(2)} {currency}</strong></div>
+                <div><span>الدخول المشروط</span><strong>{pick.price.toFixed(2)} {currency}</strong></div>
                 <div><span>وقف الخسارة</span><strong>{stop.toFixed(2)} {currency}</strong></div>
                 <div><span>الهدف الأول</span><strong>{target1.toFixed(2)} {currency}</strong></div>
                 <div><span>الهدف الثاني</span><strong>{target2.toFixed(2)} {currency}</strong></div>
                 <div><span>الكمية المقترحة</span><strong>{quantity} سهم</strong></div>
                 <div><span>قيمة الصفقة</span><strong>{used.toFixed(0)} {currency}</strong></div>
               </div>
-              <ul>{pick.reasons.slice(0, 4).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-              <button className="ghost">لماذا اخترت هذا السهم؟</button>
+              <ul>{pick.reasons.slice(0, 5).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+              <details>
+                <summary className="ghost">لماذا اخترت هذا السهم؟</summary>
+                <p>RSI: {pick.rsi.toFixed(1)} — RVOL: {pick.volumeRatio.toFixed(2)} — المسافة للمقاومة التالية: {pick.resistanceDistancePct.toFixed(2)}%</p>
+                {pick.breakdown && <p>{Object.entries(pick.breakdown).map(([key, value]) => `${key}: ${value}`).join(" • ")}</p>}
+                {!!pick.warnings?.length && <ul>{pick.warnings.map((item) => <li key={item}>{item}</li>)}</ul>}
+              </details>
             </article>
           );
         })}
       </section>
 
-      <section className="panel watchroom">
-        <div className="section-title"><span>غرفة المتابعة</span><small>المرحلة القادمة</small></div>
-        <div className="watch-grid">
-          <article><b>🔔 تنبيهات الفرص</b><p>إشعار عند تجاوز السهم درجة 90/100.</p></article>
-          <article><b>📈 متابعة الصفقة</b><p>تحديث الربح والهدف ووقف الخسارة.</p></article>
-          <article><b>🧠 مساعد ماهر هيرو</b><p>شرح سبب الدخول أو الانتظار باللغة العربية.</p></article>
-        </div>
-      </section>
+      {!!watchlist.length && <section className="panel watchroom">
+        <div className="section-title"><span>قائمة المراقبة</span><small>جيدة لكن لم تصل إلى 95/100</small></div>
+        <div className="watch-grid">{watchlist.map((stock) => <article key={stock.symbol}><b>{stock.symbol} — {stock.score}/100</b><p>{stock.classification}</p></article>)}</div>
+      </section>}
 
-      <footer>{dataMode === "live" ? "الأسعار واردة من مزود السوق، لكن النتائج تحليلية ولا تنفذ أوامر شراء وبيع." : "الوضع التجريبي مفعّل. أضف مفاتيح مزود السوق إلى Vercel لتفعيل الأسعار الحقيقية."}</footer>
+      <footer>النتائج تحليلية وليست ضمانًا للربح. تحقق من السعر والسيولة في منصة التداول قبل التنفيذ.</footer>
     </main>
   );
 }
