@@ -56,30 +56,37 @@ export async function POST(request: Request) {
     const ranked = stocks
       .map((stock) => ({ ...stock, ...scoreMaherHero(stock) }))
       .sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio);
-    const picks = ranked.filter((stock) => stock.score >= 95).slice(0, 3);
-    const watchlist = ranked.filter((stock) => stock.score >= 80 && stock.score < 95).slice(0, 5);
 
-    if (!picks.length) {
+    if (!ranked.length) {
       return NextResponse.json({
         mode: "local",
         provider: marketData.provider,
         scanned: marketData.scanned,
         picks: [],
-        watchlist,
-        message: "لا توجد حاليًا فرصة تحقق 95/100 أو أعلى. تم عرض أفضل أسهم المراقبة دون توصية دخول.",
+        watchlist: [],
+        message: "تم جلب بيانات السوق، لكن لم تتوفر أسهم صالحة للتحليل وفق شروط السعر والسيولة الحالية.",
         warning: marketData.warning,
       });
     }
+
+    const picks = ranked.filter((stock) => stock.score >= 95).slice(0, 3);
+    const watchlist = ranked.filter((stock) => stock.score < 95).slice(0, 5);
+    const topCandidates = ranked.slice(0, 3);
+
+    const localMessage = picks.length
+      ? "تم اعتماد الفرص التي تجاوزت 95/100 بواسطة محرك ماهر هيرو."
+      : "لا توجد فرصة دخول مؤكدة بدرجة 95/100 أو أعلى؛ تم تحليل أفضل المرشحين للمراقبة دون توصية شراء.";
 
     if (!process.env.OPENAI_API_KEY) {
       return NextResponse.json({
         mode: "local",
         provider: marketData.provider,
         scanned: marketData.scanned,
-        message: "تم اعتماد الفرص بواسطة محرك ماهر هيرو المحلي. الشرح الذكي غير مفعّل.",
+        message: `${localMessage} الشرح الذكي غير مفعّل لعدم توفر OPENAI_API_KEY في بيئة النشر.`,
         picks,
         watchlist,
         warning: marketData.warning,
+        openaiConfigured: false,
       });
     }
 
@@ -90,12 +97,32 @@ export async function POST(request: Request) {
         input: [
           {
             role: "system",
-            content: "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. اشرح بإيجاز سبب الاختيار وشروط إلغاء الدخول، واذكر أن التنفيذ مشروط وليس ضمانًا للربح.",
+            content:
+              "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. إذا لم توجد فرصة 95/100، اشرح أفضل ثلاثة مرشحين للمراقبة، ولماذا لم يصلوا إلى درجة الدخول، وما الشروط الفنية التي يجب تحققها قبل التفكير بالدخول. إذا وجدت فرصًا 95/100 أو أعلى، اشرح سبب الاختيار وشروط إلغاء الدخول. اذكر دائمًا أن التنفيذ مشروط وليس ضمانًا للربح.",
           },
-          { role: "user", content: JSON.stringify({ market: input.market, capital: input.capital, riskPct: input.riskPct, picks }) },
+          {
+            role: "user",
+            content: JSON.stringify({
+              market: input.market,
+              capital: input.capital,
+              riskPct: input.riskPct,
+              confirmedPicks: picks,
+              topCandidates,
+            }),
+          },
         ],
       });
-      return NextResponse.json({ mode: "openai", provider: marketData.provider, scanned: marketData.scanned, picks, watchlist, narrative: response.output_text, warning: marketData.warning });
+
+      return NextResponse.json({
+        mode: "openai",
+        provider: marketData.provider,
+        scanned: marketData.scanned,
+        picks,
+        watchlist,
+        narrative: response.output_text || localMessage,
+        warning: marketData.warning,
+        openaiConfigured: true,
+      });
     } catch (openAIError) {
       const details = openAIError instanceof Error ? openAIError.message : "تعذر الاتصال بخدمة OpenAI";
       return NextResponse.json({
@@ -104,8 +131,9 @@ export async function POST(request: Request) {
         scanned: marketData.scanned,
         picks,
         watchlist,
-        message: `تم عرض النتائج المحلية لأن الشرح الذكي غير متاح مؤقتًا. ${details.slice(0, 140)}`,
+        message: `${localMessage} تعذر تشغيل الشرح الذكي: ${details.slice(0, 180)}`,
         warning: marketData.warning,
+        openaiConfigured: true,
       });
     }
   } catch (error) {
