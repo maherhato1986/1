@@ -1,0 +1,102 @@
+/* Portfolio desktop table enhancement; mobile remains card-based */
+@media (min-width: 901px) {
+  .portfolio-grid {
+    display: block;
+    overflow-x: auto;
+    border: 1px solid #274b68;
+    border-radius: 18px;
+    background: #081522;
+    box-shadow: 0 18px 45px rgba(0,0,0,.22);
+  }
+
+  .portfolio-grid::before {
+    content: "السهم      الكمية      متوسط الشراء      السعر الحالي      الربح / الخسارة      الحالة      الهدف 1 / 2      وقف الحماية      الإجراءات";
+    display: block;
+    direction: rtl;
+    white-space: pre;
+    min-width: 1180px;
+    padding: 16px 18px;
+    background: #10283e;
+    border-bottom: 1px solid #315a78;
+    color: #8fa8bc;
+    font-weight: 800;
+    font-size: .82rem;
+    word-spacing: 21px;
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+
+  .holding-card {
+    display: grid;
+    grid-template-columns: 130px 72px 116px 116px 140px 150px 170px 120px 255px;
+    align-items: center;
+    gap: 10px;
+    min-width: 1180px;
+    padding: 13px 15px;
+    border: 0;
+    border-bottom: 1px solid #193650;
+    border-radius: 0;
+    background: #081522;
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  .holding-card:last-child { border-bottom: 0; }
+  .holding-card::before { inset: 0 auto 0 0; width: 4px; height: auto; }
+  .holding-card::after { display: none !important; content: none !important; }
+
+  .holding-head { display: contents; }
+  .holding-head > div { grid-column: 1; }
+  .holding-head h3 { font-size: 1.18rem; margin: 0 0 4px; }
+  .holding-head span { font-size: .72rem; }
+  .holding-head > strong { grid-column: 5; font-size: .95rem; text-align: center; }
+  .holding-head > strong small { font-size: .72rem; }
+
+  .holding-signal {
+    grid-column: 6;
+    margin: 0;
+    text-align: center;
+    font-size: .76rem;
+    padding: 7px 8px;
+  }
+
+  .holding-metrics { display: contents; }
+  .holding-metrics div {
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    text-align: center;
+  }
+  .holding-metrics span { display: none; }
+  .holding-metrics b { font-size: .88rem; white-space: nowrap; }
+  .holding-metrics div:nth-child(1) { grid-column: 3; }
+  .holding-metrics div:nth-child(2) { grid-column: 4; }
+  .holding-metrics div:nth-child(3) { grid-column: 2; }
+  .holding-metrics div:nth-child(4) { display: none; }
+  .holding-metrics div:nth-child(5) { grid-column: 7; transform: translateX(-36px); }
+  .holding-metrics div:nth-child(5) b::after { content: " /"; color: #7894aa; }
+  .holding-metrics div:nth-child(6) { grid-column: 7; transform: translateX(42px); }
+  .holding-metrics div:nth-child(7) { grid-column: 8; }
+  .holding-metrics div:nth-child(8) { display: none; }
+
+  .holding-reason,
+  .holding-note { display: none; }
+
+  .holding-buttons {
+    grid-column: 9;
+    display: grid;
+    grid-template-columns: 1fr 1fr 72px;
+    gap: 6px;
+  }
+  .holding-buttons button { min-width: 0; padding: 8px 6px; font-size: .72rem; }
+  .holding-buttons .secondary-button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .holding-card:hover { background: #0b1b2b; }
+}
+
+@media (max-width: 900px) {
+  .portfolio-grid::before { display: none; }
+  .portfolio-grid { border: 0; background: transparent; box-shadow: none; }
+}
