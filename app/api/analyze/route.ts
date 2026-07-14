@@ -8,13 +8,14 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const requestSchema = z.object({
-  market: z.enum(["US", "SA"]),
+  market: z.literal("US").default("US"),
   capital: z.number().min(100).max(10_000_000),
   riskPct: z.number().min(0.1).max(3),
+  automatic: z.boolean().optional().default(false),
 });
 
 const requests = new Map<string, number>();
-const RATE_LIMIT_MS = 30_000;
+const RATE_LIMIT_MS = 25_000;
 
 function clientKey(request: Request) {
   return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "anonymous";
@@ -35,58 +36,44 @@ export async function POST(request: Request) {
     const now = Date.now();
     const previous = requests.get(key) ?? 0;
     if (now - previous < RATE_LIMIT_MS) {
-      return NextResponse.json({ error: "يرجى الانتظار 30 ثانية قبل إعادة الفحص." }, { status: 429 });
+      return NextResponse.json({ error: "يرجى الانتظار قليلًا قبل إعادة الفحص." }, { status: 429 });
     }
     requests.set(key, now);
 
     const input = requestSchema.parse(await request.json());
     const origin = new URL(request.url).origin;
-    const scanPath = input.market === "US" ? "/api/market/scan" : "/api/saudi/scan?limit=180";
-    const marketResponse = await fetch(`${origin}${scanPath}`, {
+    const marketResponse = await fetch(`${origin}/api/market/scan`, {
       cache: "no-store",
       signal: AbortSignal.timeout(50_000),
-      headers: { "x-maher-hero-source": "analysis" },
+      headers: { "x-maher-hero-source": input.automatic ? "auto-radar" : "manual-analysis" },
     });
     const marketData = await readJsonResponse(marketResponse);
     if (!marketResponse.ok || marketData.mode !== "live") {
       throw new Error(marketData.error || marketData.errors?.[0] || "تعذر جلب بيانات السوق الحقيقية");
     }
 
-    const stocks = (input.market === "US" ? marketData.stocks : marketData.top) as StockSnapshot[];
+    const stocks = marketData.stocks as StockSnapshot[];
     const ranked = stocks
       .map((stock) => ({ ...stock, ...scoreMaherHero(stock) }))
       .sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio);
 
-    if (!ranked.length) {
-      return NextResponse.json({
-        mode: "local",
-        provider: marketData.provider,
-        scanned: marketData.scanned,
-        picks: [],
-        watchlist: [],
-        message: "تم جلب بيانات السوق، لكن لم تتوفر أسهم صالحة للتحليل وفق شروط السعر والسيولة الحالية.",
-        warning: marketData.warning,
-      });
-    }
-
-    const picks = ranked.filter((stock) => stock.score >= 95).slice(0, 3);
-    const watchlist = ranked.filter((stock) => stock.score < 95).slice(0, 5);
-    const topCandidates = ranked.slice(0, 3);
-
+    const picks = ranked.filter((stock) => stock.score >= 90).slice(0, 10);
+    const watchlist = ranked.filter((stock) => stock.score < 90).slice(0, 5);
     const localMessage = picks.length
-      ? "تم اعتماد الفرص التي تجاوزت 95/100 بواسطة محرك ماهر هيرو."
-      : "لا توجد فرصة دخول مؤكدة بدرجة 95/100 أو أعلى؛ تم تحليل أفضل المرشحين للمراقبة دون توصية شراء.";
+      ? `تم رصد ${picks.length} فرصة بدرجة 90/100 أو أعلى. يجب التأكد من بقاء السعر داخل منطقة الدخول قبل التنفيذ.`
+      : "لا توجد فرصة أمريكية بدرجة 90/100 أو أعلى في الفحص الحالي.";
 
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env.OPENAI_API_KEY || input.automatic) {
       return NextResponse.json({
         mode: "local",
         provider: marketData.provider,
         scanned: marketData.scanned,
-        message: `${localMessage} الشرح الذكي غير مفعّل لعدم توفر OPENAI_API_KEY في بيئة النشر.`,
+        message: localMessage,
         picks,
         watchlist,
         warning: marketData.warning,
-        openaiConfigured: false,
+        timestamp: marketData.timestamp || new Date().toISOString(),
+        threshold: 90,
       });
     }
 
@@ -98,17 +85,11 @@ export async function POST(request: Request) {
           {
             role: "system",
             content:
-              "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. إذا لم توجد فرصة 95/100، اشرح أفضل ثلاثة مرشحين للمراقبة، ولماذا لم يصلوا إلى درجة الدخول، وما الشروط الفنية التي يجب تحققها قبل التفكير بالدخول. إذا وجدت فرصًا 95/100 أو أعلى، اشرح سبب الاختيار وشروط إلغاء الدخول. اذكر دائمًا أن التنفيذ مشروط وليس ضمانًا للربح.",
+              "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. اشرح فرص 90/100 أو أعلى وشروط إلغاء الدخول، واذكر أن التنفيذ مشروط وليس ضمانًا للربح.",
           },
           {
             role: "user",
-            content: JSON.stringify({
-              market: input.market,
-              capital: input.capital,
-              riskPct: input.riskPct,
-              confirmedPicks: picks,
-              topCandidates,
-            }),
+            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, picks, topCandidates: ranked.slice(0, 3) }),
           },
         ],
       });
@@ -121,7 +102,8 @@ export async function POST(request: Request) {
         watchlist,
         narrative: response.output_text || localMessage,
         warning: marketData.warning,
-        openaiConfigured: true,
+        timestamp: marketData.timestamp || new Date().toISOString(),
+        threshold: 90,
       });
     } catch (openAIError) {
       const details = openAIError instanceof Error ? openAIError.message : "تعذر الاتصال بخدمة OpenAI";
@@ -133,7 +115,8 @@ export async function POST(request: Request) {
         watchlist,
         message: `${localMessage} تعذر تشغيل الشرح الذكي: ${details.slice(0, 180)}`,
         warning: marketData.warning,
-        openaiConfigured: true,
+        timestamp: marketData.timestamp || new Date().toISOString(),
+        threshold: 90,
       });
     }
   } catch (error) {
