@@ -1,235 +1,108 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Pick = {
-  symbol: string;
-  name: string;
-  market: "US";
-  price: number;
-  changePct: number;
-  volumeRatio: number;
-  rsi: number;
-  macdSignal: "bullish" | "bearish" | "neutral";
-  trend: "up" | "down" | "sideways";
-  breakout: "early" | "retest" | "late" | "none";
-  resistanceDistancePct: number;
-  stopDistancePct: number;
-  score: number;
-  classification: string;
-  reasons: string[];
-  warnings?: string[];
+  symbol: string; name: string; market: "US"; price: number; changePct: number; volumeRatio: number; rsi: number;
+  macdSignal: "bullish" | "bearish" | "neutral"; trend: "up" | "down" | "sideways";
+  breakout: "early" | "retest" | "late" | "none"; resistanceDistancePct: number; stopDistancePct: number;
+  score: number; classification: string; reasons: string[]; warnings?: string[];
 };
-
 type RadarPick = Pick & { detectedAt: string; updatedAt: string };
-
 type ClockData = { isOpen: boolean; nextOpen?: string; nextClose?: string; error?: string };
+type Quote = {
+  symbol: string; price?: number; changePct?: number; rsi?: number; macdSignal?: "bullish" | "bearish" | "neutral";
+  volumeRatio?: number; resistance?: number; support?: number; atr?: number;
+  signal?: "hold" | "near_target" | "partial_sell" | "exit" | "danger"; reasons?: string[]; updatedAt?: string; error?: string;
+};
+type Holding = {
+  id: string; symbol: string; buyPrice: number; quantity: number; buyDate: string; buyFee: number;
+  customTarget?: number; note?: string; longTerm: boolean; createdAt: string;
+};
+type Sale = { id: string; symbol: string; quantity: number; buyPrice: number; sellPrice: number; fee: number; soldAt: string; realized: number };
+
+type HoldingView = Holding & { quote?: Quote; pnl: number; pnlPct: number; breakEven: number; target1: number; target2: number; protectiveStop: number; status: string };
 
 const AUTO_SCAN_MS = 10 * 60 * 1000;
 const CLOCK_REFRESH_MS = 60 * 1000;
+const PORTFOLIO_REFRESH_MS = 60 * 1000;
+const HOLDINGS_KEY = "maher-hero-holdings-v1";
+const SALES_KEY = "maher-hero-sales-v1";
+const DEFAULT_HOLDINGS: Holding[] = [
+  ["JLHL",17.08,26],["JSPR",0.6628,300],["TNDM",16.30,16],["AMWL",11.49,10],
+  ["FIG",24.09,4],["KLXE",2.60,100],["OPEN",4.67,25],["INTC",110.58,4],
+].map(([symbol,buyPrice,quantity]) => ({ id:`seed-${symbol}`, symbol:String(symbol), buyPrice:Number(buyPrice), quantity:Number(quantity), buyDate:"2026-07-13", buyFee:0, longTerm:false, createdAt:new Date().toISOString() }));
 
 async function readApiResponse(response: Response) {
   const contentType = response.headers.get("content-type") || "";
-  if (!contentType.includes("application/json")) {
-    const text = await response.text();
-    throw new Error(`تعذر الوصول إلى خدمة الفحص (${response.status}). ${text.slice(0, 80)}`);
-  }
+  if (!contentType.includes("application/json")) { const text = await response.text(); throw new Error(`تعذر الوصول إلى الخدمة (${response.status}). ${text.slice(0,80)}`); }
   return response.json();
 }
+function scoreTone(score:number){ return score>=90?"strong":score>=80?"watch":"avoid"; }
+function indicatorLabel(value:Pick["macdSignal"]){ return value==="bullish"?"إيجابي":value==="bearish"?"سلبي":"محايد"; }
+function mergeRadar(previous:RadarPick[], incoming:Pick[]){ const now=new Date().toISOString(); const old=new Map(previous.map(x=>[x.symbol,x])); return incoming.map(x=>({...x,detectedAt:old.get(x.symbol)?.detectedAt||now,updatedAt:now})); }
+function money(v:number){ return `${v.toFixed(v<1?4:2)} $`; }
+function signalLabel(signal?:Quote["signal"]){ return signal==="danger"?"قرار عاجل":signal==="exit"?"خروج كامل":signal==="partial_sell"?"بيع جزئي":signal==="near_target"?"قريب من الهدف":"احتفاظ ومراقبة"; }
+function signalClass(signal?:Quote["signal"]){ return signal==="danger"||signal==="exit"?"danger":signal==="partial_sell"||signal==="near_target"?"warning":"safe"; }
 
-function scoreTone(score: number) {
-  if (score >= 90) return "strong";
-  if (score >= 80) return "watch";
-  return "avoid";
-}
+export default function Home(){
+  const [tab,setTab]=useState<"radar"|"portfolio"|"history">("radar");
+  const [capital,setCapital]=useState(5000); const [riskPct,setRiskPct]=useState(1); const [loading,setLoading]=useState(false);
+  const [radar,setRadar]=useState<RadarPick[]>([]); const [watchlist,setWatchlist]=useState<Pick[]>([]); const [narrative,setNarrative]=useState("");
+  const [warning,setWarning]=useState(""); const [error,setError]=useState(""); const [lastScan,setLastScan]=useState("لم يبدأ الفحص بعد");
+  const [nextScanAt,setNextScanAt]=useState<Date|null>(null); const [scanned,setScanned]=useState(0); const [provider,setProvider]=useState("");
+  const [marketOpen,setMarketOpen]=useState(false); const [clockReady,setClockReady]=useState(false); const [autoEnabled,setAutoEnabled]=useState(true);
+  const [holdings,setHoldings]=useState<Holding[]>([]); const [sales,setSales]=useState<Sale[]>([]); const [quotes,setQuotes]=useState<Record<string,Quote>>({});
+  const [portfolioLoading,setPortfolioLoading]=useState(false); const [showAdd,setShowAdd]=useState(false); const [portfolioUpdated,setPortfolioUpdated]=useState("لم يتم التحديث");
+  const [form,setForm]=useState({symbol:"",buyPrice:"",quantity:"",buyDate:new Date().toISOString().slice(0,10),buyFee:"0",customTarget:"",note:""});
+  const scanningRef=useRef(false); const alertedRef=useRef<Record<string,string>>({});
 
-function indicatorLabel(value: Pick["macdSignal"]) {
-  if (value === "bullish") return "إيجابي";
-  if (value === "bearish") return "سلبي";
-  return "محايد";
-}
+  useEffect(()=>{ try { const saved=localStorage.getItem(HOLDINGS_KEY); const sold=localStorage.getItem(SALES_KEY); setHoldings(saved?JSON.parse(saved):DEFAULT_HOLDINGS); setSales(sold?JSON.parse(sold):[]); } catch { setHoldings(DEFAULT_HOLDINGS); } },[]);
+  useEffect(()=>{ if(holdings.length||localStorage.getItem(HOLDINGS_KEY)) localStorage.setItem(HOLDINGS_KEY,JSON.stringify(holdings)); },[holdings]);
+  useEffect(()=>{ localStorage.setItem(SALES_KEY,JSON.stringify(sales)); },[sales]);
 
-function mergeRadar(previous: RadarPick[], incoming: Pick[]) {
-  const now = new Date().toISOString();
-  const previousMap = new Map(previous.map((item) => [item.symbol, item]));
-  return incoming.map((item) => ({
-    ...item,
-    detectedAt: previousMap.get(item.symbol)?.detectedAt || now,
-    updatedAt: now,
-  }));
-}
+  const tradableCapital=useMemo(()=>capital*.9,[capital]);
+  const bestScore=Math.max(0,...radar.map(x=>x.score),...watchlist.map(x=>x.score));
 
-export default function Home() {
-  const [capital, setCapital] = useState(5000);
-  const [riskPct, setRiskPct] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [radar, setRadar] = useState<RadarPick[]>([]);
-  const [watchlist, setWatchlist] = useState<Pick[]>([]);
-  const [narrative, setNarrative] = useState("");
-  const [warning, setWarning] = useState("");
-  const [error, setError] = useState("");
-  const [lastScan, setLastScan] = useState("لم يبدأ الفحص بعد");
-  const [nextScanAt, setNextScanAt] = useState<Date | null>(null);
-  const [scanned, setScanned] = useState(0);
-  const [provider, setProvider] = useState("");
-  const [marketOpen, setMarketOpen] = useState(false);
-  const [clockReady, setClockReady] = useState(false);
-  const [autoEnabled, setAutoEnabled] = useState(true);
-  const scanningRef = useRef(false);
+  const refreshClock=useCallback(async()=>{ try{ const response=await fetch("/api/market/clock",{cache:"no-store"}); const data=await readApiResponse(response) as ClockData; setMarketOpen(Boolean(data.isOpen)); setClockReady(true); if(!response.ok&&data.error)setWarning(data.error); return Boolean(data.isOpen); }catch(err){ setClockReady(true); setMarketOpen(false); setWarning(err instanceof Error?err.message:"تعذر قراءة حالة السوق"); return false; } },[]);
 
-  const tradableCapital = useMemo(() => capital * 0.9, [capital]);
-  const bestScore = Math.max(0, ...radar.map((item) => item.score), ...watchlist.map((item) => item.score));
+  const analyze=useCallback(async(automatic=false)=>{ if(scanningRef.current)return; scanningRef.current=true; setLoading(true); setError(""); if(!automatic)setNarrative("");
+    try{ const response=await fetch("/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({market:"US",capital,riskPct,automatic})}); const data=await readApiResponse(response); if(!response.ok)throw new Error(data.error||"تعذر التحليل"); setRadar(prev=>mergeRadar(prev,data.picks||[])); setWatchlist(data.watchlist||[]); setNarrative(data.narrative||data.message||""); setWarning(data.warning||""); setScanned(data.scanned||0); setProvider(data.provider||""); setLastScan(new Date().toLocaleTimeString("ar-SA")); setNextScanAt(new Date(Date.now()+AUTO_SCAN_MS)); }
+    catch(err){setError(err instanceof Error?err.message:"حدث خطأ غير متوقع");}finally{scanningRef.current=false;setLoading(false);} },[capital,riskPct]);
 
-  const refreshClock = useCallback(async () => {
-    try {
-      const response = await fetch("/api/market/clock", { cache: "no-store" });
-      const data = (await readApiResponse(response)) as ClockData;
-      setMarketOpen(Boolean(data.isOpen));
-      setClockReady(true);
-      if (!response.ok && data.error) setWarning(data.error);
-      return Boolean(data.isOpen);
-    } catch (err) {
-      setClockReady(true);
-      setMarketOpen(false);
-      setWarning(err instanceof Error ? err.message : "تعذر قراءة حالة السوق");
-      return false;
-    }
-  }, []);
+  const notify=useCallback((title:string,body:string)=>{ if(typeof window==="undefined")return; try{ if("Notification" in window&&Notification.permission==="granted") new Notification(title,{body}); const audio=new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA="); audio.play().catch(()=>{}); }catch{} },[]);
 
-  const analyze = useCallback(async (automatic = false) => {
-    if (scanningRef.current) return;
-    scanningRef.current = true;
-    setLoading(true);
-    setError("");
-    if (!automatic) setNarrative("");
+  const refreshPortfolio=useCallback(async()=>{ if(!holdings.length)return; setPortfolioLoading(true); try{ const response=await fetch("/api/portfolio/quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbols:holdings.map(h=>h.symbol)})}); const data=await readApiResponse(response); if(!response.ok)throw new Error(data.error||"تعذر تحديث المحفظة"); const map:Record<string,Quote>={}; for(const quote of data.quotes||[]){ map[quote.symbol]=quote; const key=`${quote.symbol}:${quote.signal}`; if(["danger","exit","partial_sell","near_target"].includes(quote.signal)&&alertedRef.current[quote.symbol]!==key){ alertedRef.current[quote.symbol]=key; notify(`تنبيه ${quote.symbol}`,`${signalLabel(quote.signal)} عند ${quote.price?.toFixed(2)}$`); } } setQuotes(map); setPortfolioUpdated(new Date().toLocaleTimeString("ar-SA")); }
+    catch(err){setError(err instanceof Error?err.message:"تعذر تحديث المحفظة");}finally{setPortfolioLoading(false);} },[holdings,notify]);
 
-    try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ market: "US", capital, riskPct, automatic }),
-      });
-      const data = await readApiResponse(response);
-      if (!response.ok) throw new Error(data.error || "تعذر التحليل");
+  useEffect(()=>{ let scanTimer:ReturnType<typeof setInterval>|undefined; let clockTimer:ReturnType<typeof setInterval>|undefined; async function start(){const open=await refreshClock(); if(open&&autoEnabled)await analyze(true); scanTimer=setInterval(async()=>{const isOpen=await refreshClock();if(isOpen&&autoEnabled)await analyze(true);},AUTO_SCAN_MS); clockTimer=setInterval(refreshClock,CLOCK_REFRESH_MS);} start(); return()=>{if(scanTimer)clearInterval(scanTimer);if(clockTimer)clearInterval(clockTimer);}; },[analyze,autoEnabled,refreshClock]);
+  useEffect(()=>{ if(!holdings.length)return; refreshPortfolio(); const timer=setInterval(()=>{if(marketOpen)refreshPortfolio();},PORTFOLIO_REFRESH_MS); return()=>clearInterval(timer); },[holdings.length,marketOpen,refreshPortfolio]);
 
-      setRadar((previous) => mergeRadar(previous, data.picks || []));
-      setWatchlist(data.watchlist || []);
-      setNarrative(data.narrative || data.message || "");
-      setWarning(data.warning || "");
-      setScanned(data.scanned || 0);
-      setProvider(data.provider || "");
-      setLastScan(new Date().toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-      setNextScanAt(new Date(Date.now() + AUTO_SCAN_MS));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "حدث خطأ غير متوقع");
-    } finally {
-      scanningRef.current = false;
-      setLoading(false);
-    }
-  }, [capital, riskPct]);
+  function tradePlan(pick:Pick,index=0){ const allocation=tradableCapital*([.4,.35,.25][index]??.2); const stop=pick.price*(1-pick.stopDistancePct/100); const riskPerShare=Math.max(.01,pick.price-stop); const maxRisk=capital*riskPct/100; const quantity=Math.max(0,Math.min(Math.floor(allocation/pick.price),Math.floor(maxRisk/riskPerShare))); const technicalTarget=pick.price*(1+Math.max(0,pick.resistanceDistancePct)/100); return{stop,target1:Math.min(technicalTarget,pick.price+riskPerShare),target2:Math.min(technicalTarget,pick.price+riskPerShare*2),quantity}; }
 
-  useEffect(() => {
-    let scanTimer: ReturnType<typeof setInterval> | undefined;
-    let clockTimer: ReturnType<typeof setInterval> | undefined;
+  const holdingViews:HoldingView[]=useMemo(()=>holdings.map(h=>{ const q=quotes[h.symbol]; const price=q?.price||h.buyPrice; const cost=h.buyPrice*h.quantity+h.buyFee; const pnl=price*h.quantity-cost; const pnlPct=cost?100*pnl/cost:0; const breakEven=(h.buyPrice*h.quantity+h.buyFee)/Math.max(1,h.quantity); const resistance=q?.resistance||h.customTarget||price*1.06; const atr=q?.atr||price*.03; const target1=h.customTarget||Math.max(breakEven,resistance); const target2=Math.max(target1,price+atr*2); const protectiveStop=pnl>0?Math.max(h.buyPrice,price-atr*1.2):(q?.support||price-atr*1.5); let status=signalLabel(q?.signal); if(!q?.signal&&Math.abs((price-breakEven)/breakEven)*100<=1)status="قريب من التعادل"; return{...h,quote:q,pnl,pnlPct,breakEven,target1,target2,protectiveStop,status}; }).sort((a,b)=>{const order:Record<string,number>={"قرار عاجل":0,"خروج كامل":1,"بيع جزئي":2,"قريب من الهدف":3,"قريب من التعادل":4,"احتفاظ ومراقبة":5};return(order[a.status]??9)-(order[b.status]??9);}),[holdings,quotes]);
+  const portfolioValue=holdingViews.reduce((s,h)=>s+(h.quote?.price||h.buyPrice)*h.quantity,0); const totalPnl=holdingViews.reduce((s,h)=>s+h.pnl,0); const realized=sales.reduce((s,x)=>s+x.realized,0);
 
-    async function start() {
-      const open = await refreshClock();
-      if (open && autoEnabled) await analyze(true);
-      scanTimer = setInterval(async () => {
-        const isOpen = await refreshClock();
-        if (isOpen && autoEnabled) await analyze(true);
-      }, AUTO_SCAN_MS);
-      clockTimer = setInterval(refreshClock, CLOCK_REFRESH_MS);
-    }
+  function submitHolding(e:FormEvent){ e.preventDefault(); const symbol=form.symbol.trim().toUpperCase(); const buyPrice=Number(form.buyPrice); const quantity=Number(form.quantity); if(!symbol||buyPrice<=0||quantity<=0){setError("أدخل رمز السهم وسعر شراء وكمية صحيحة.");return;} const item:Holding={id:crypto.randomUUID(),symbol,buyPrice,quantity,buyDate:form.buyDate,buyFee:Number(form.buyFee)||0,customTarget:Number(form.customTarget)||undefined,note:form.note,longTerm:false,createdAt:new Date().toISOString()}; setHoldings(prev=>[item,...prev]); setForm({symbol:"",buyPrice:"",quantity:"",buyDate:new Date().toISOString().slice(0,10),buyFee:"0",customTarget:"",note:""}); setShowAdd(false); setTab("portfolio"); }
+  function removeHolding(id:string){ if(confirm("حذف السهم من المحفظة دون تسجيل بيع؟"))setHoldings(prev=>prev.filter(h=>h.id!==id)); }
+  function toggleLongTerm(id:string){setHoldings(prev=>prev.map(h=>h.id===id?{...h,longTerm:!h.longTerm}:h));}
+  function sellHolding(h:HoldingView){ const max=h.quantity; const qty=Number(prompt(`عدد الأسهم المباعة من ${h.symbol} (المتاح ${max})`,String(max))); if(!qty||qty<=0||qty>max)return; const sellPrice=Number(prompt("سعر البيع",String(h.quote?.price||h.buyPrice))); if(!sellPrice||sellPrice<=0)return; const fee=Number(prompt("عمولة البيع", "0"))||0; const realizedValue=(sellPrice-h.buyPrice)*qty-fee-(h.buyFee*(qty/max)); const sale:Sale={id:crypto.randomUUID(),symbol:h.symbol,quantity:qty,buyPrice:h.buyPrice,sellPrice,fee,soldAt:new Date().toISOString(),realized:realizedValue}; setSales(prev=>[sale,...prev]); setHoldings(prev=>prev.flatMap(x=>x.id!==h.id?[x]:qty===max?[]:[{...x,quantity:x.quantity-qty,buyFee:x.buyFee*(x.quantity-qty)/x.quantity}])); setTab("history"); }
+  function requestNotifications(){ if("Notification" in window)Notification.requestPermission(); }
+  function importCsv(e:ChangeEvent<HTMLInputElement>){ const file=e.target.files?.[0]; if(!file)return; const reader=new FileReader(); reader.onload=()=>{ const lines=String(reader.result||"").split(/\r?\n/).filter(Boolean); const imported:Holding[]=[]; for(const line of lines.slice(1)){ const [symbol,buyPrice,quantity,buyDate,buyFee]=line.split(",").map(x=>x.trim()); if(symbol&&Number(buyPrice)>0&&Number(quantity)>0)imported.push({id:crypto.randomUUID(),symbol:symbol.toUpperCase(),buyPrice:Number(buyPrice),quantity:Number(quantity),buyDate:buyDate||new Date().toISOString().slice(0,10),buyFee:Number(buyFee)||0,longTerm:false,createdAt:new Date().toISOString()}); } setHoldings(prev=>[...imported,...prev]); }; reader.readAsText(file); e.target.value=""; }
 
-    start();
-    return () => {
-      if (scanTimer) clearInterval(scanTimer);
-      if (clockTimer) clearInterval(clockTimer);
-    };
-  }, [analyze, autoEnabled, refreshClock]);
+  function StockCard({pick,index,compact=false}:{pick:Pick;index:number;compact?:boolean}){const plan=tradePlan(pick,index);const tone=scoreTone(pick.score);return <article className={`stock-card ${tone} ${compact?"compact-card":""}`}><div className="card-top"><div><span className="rank">#{index+1} فرصة 90+</span><h2>{pick.symbol}</h2><p className="stock-name">{pick.name}</p></div><div className={`score-badge ${tone}`}><strong>{pick.score}</strong><small>/100</small></div></div><div className={`decision-pill ${tone}`}>{pick.breakout==="retest"?"إعادة اختبار":pick.breakout==="early"?"اختراق مبكر":"شراء مشروط"}</div><div className="score-track"><span style={{width:`${Math.min(100,pick.score)}%`}}/></div><div className="indicator-grid"><div><span>السعر الحالي</span><strong>{pick.price.toFixed(2)} $</strong></div><div><span>التغير</span><strong>{pick.changePct.toFixed(2)}%</strong></div><div><span>RSI</span><strong>{pick.rsi.toFixed(1)}</strong></div><div><span>RVOL</span><strong>{pick.volumeRatio.toFixed(2)}</strong></div></div><div className="trade-grid"><div><span>منطقة الشراء</span><strong>{(pick.price*.995).toFixed(2)}–{(pick.price*1.005).toFixed(2)} $</strong></div><div><span>وقف الخسارة</span><strong>{plan.stop.toFixed(2)} $</strong></div><div><span>الهدف الأول</span><strong>{plan.target1.toFixed(2)} $</strong></div><div><span>الهدف الثاني</span><strong>{plan.target2.toFixed(2)} $</strong></div>{!compact&&<><div><span>الكمية المقترحة</span><strong>{plan.quantity} سهم</strong></div><div><span>MACD</span><strong>{indicatorLabel(pick.macdSignal)}</strong></div></>}</div></article>}
 
-  function tradePlan(pick: Pick, index = 0) {
-    const allocation = tradableCapital * ([0.4, 0.35, 0.25][index] ?? 0.2);
-    const stop = pick.price * (1 - pick.stopDistancePct / 100);
-    const riskPerShare = Math.max(0.01, pick.price - stop);
-    const maxRisk = capital * riskPct / 100;
-    const quantity = Math.max(0, Math.min(Math.floor(allocation / pick.price), Math.floor(maxRisk / riskPerShare)));
-    const technicalTarget = pick.price * (1 + Math.max(0, pick.resistanceDistancePct) / 100);
-    const target1 = Math.min(technicalTarget, pick.price + riskPerShare);
-    const target2 = Math.min(technicalTarget, pick.price + riskPerShare * 2);
-    return { stop, target1, target2, quantity };
-  }
+  return <main>
+    <nav className="topbar"><div className="brand">MAHER HERO <span>AI</span></div><div className={`live ${marketOpen?"is-live":""}`}><i/>{marketOpen?"السوق الأمريكي مفتوح":"السوق الأمريكي مغلق"}</div></nav>
+    <header className="hero"><div><div className="badge">Maher Hero AI — v4.0</div><h1>غرفة عمليات الأسهم</h1><p>رادار تلقائي للفرص ومحفظة ذكية لمتابعة أفضل نقاط الخروج والتنبيهات.</p></div><aside className="market-box"><span>حالة النظام</span><strong>{loading||portfolioLoading?"جارٍ التحديث":autoEnabled?"مراقبة تلقائية":"متوقف يدويًا"}</strong><small>آخر فحص رادار: {lastScan}</small><small>آخر تحديث محفظة: {portfolioUpdated}</small></aside></header>
+    <section className="tabbar"><button className={tab==="radar"?"active":""} onClick={()=>setTab("radar")}>رادار 90+</button><button className={tab==="portfolio"?"active":""} onClick={()=>setTab("portfolio")}>محفظتي <b>{holdings.length}</b></button><button className={tab==="history"?"active":""} onClick={()=>setTab("history")}>الأرباح المحققة</button></section>
+    {error&&<p className="error">{error}</p>}{warning&&<p className="warning-box">تنبيه البيانات: {warning}</p>}{!clockReady&&<p className="warning-box">جارٍ التحقق من حالة السوق...</p>}
 
-  function StockCard({ pick, index, compact = false }: { pick: Pick; index: number; compact?: boolean }) {
-    const plan = tradePlan(pick, index);
-    const tone = scoreTone(pick.score);
-    return (
-      <article className={`stock-card ${tone} ${compact ? "compact-card" : ""}`}>
-        <div className="card-top">
-          <div><span className="rank">#{index + 1} فرصة 90+</span><h2>{pick.symbol}</h2><p className="stock-name">{pick.name}</p></div>
-          <div className={`score-badge ${tone}`}><strong>{pick.score}</strong><small>/100</small></div>
-        </div>
-        <div className={`decision-pill ${tone}`}>{pick.breakout === "retest" ? "إعادة اختبار" : pick.breakout === "early" ? "اختراق مبكر" : "شراء مشروط"}</div>
-        <div className="score-track"><span style={{ width: `${Math.min(100, pick.score)}%` }} /></div>
-        <div className="indicator-grid">
-          <div><span>السعر الحالي</span><strong>{pick.price.toFixed(2)} $</strong></div>
-          <div><span>التغير</span><strong>{pick.changePct.toFixed(2)}%</strong></div>
-          <div><span>RSI</span><strong>{pick.rsi.toFixed(1)}</strong></div>
-          <div><span>RVOL</span><strong>{pick.volumeRatio.toFixed(2)}</strong></div>
-        </div>
-        <div className="trade-grid">
-          <div><span>منطقة الشراء</span><strong>{(pick.price * 0.995).toFixed(2)}–{(pick.price * 1.005).toFixed(2)} $</strong></div>
-          <div><span>وقف الخسارة</span><strong>{plan.stop.toFixed(2)} $</strong></div>
-          <div><span>الهدف الأول</span><strong>{plan.target1.toFixed(2)} $</strong></div>
-          <div><span>الهدف الثاني</span><strong>{plan.target2.toFixed(2)} $</strong></div>
-          {!compact && <><div><span>الكمية المقترحة</span><strong>{plan.quantity} سهم</strong></div><div><span>MACD</span><strong>{indicatorLabel(pick.macdSignal)}</strong></div></>}
-        </div>
-        {!compact && <details className="analysis-details"><summary>عرض التحليل الكامل</summary><div className="details-content"><p><b>المقاومة التالية:</b> {pick.resistanceDistancePct.toFixed(2)}%</p>{!!pick.reasons?.length && <ul>{pick.reasons.slice(0, 6).map((reason) => <li key={reason}>{reason}</li>)}</ul>}</div></details>}
-      </article>
-    );
-  }
+    {tab==="radar"&&<section className="workspace"><div className="main-column"><section className="panel controls us-controls"><label>رأس المال<input type="number" min="100" value={capital} onChange={e=>setCapital(Number(e.target.value))}/></label><label>المخاطرة لكل صفقة %<input type="number" min=".1" max="3" step=".1" value={riskPct} onChange={e=>setRiskPct(Number(e.target.value))}/></label><button onClick={()=>analyze(false)} disabled={loading}>{loading?"جارٍ الفحص...":"فحص الآن"}</button><button className="secondary-button" onClick={()=>setAutoEnabled(v=>!v)}>{autoEnabled?"إيقاف التلقائي":"تشغيل التلقائي"}</button></section>{loading&&<section className="scanner panel"><strong>جارٍ تحليل السوق الأمريكي</strong><div className="progress"><b/></div></section>}<section className="summary"><article><span>رأس المال</span><strong>{capital.toLocaleString()} $</strong></article><article><span>المتاح للتداول</span><strong>{tradableCapital.toLocaleString()} $</strong></article><article><span>الأسهم المفحوصة</span><strong>{scanned||"—"}</strong></article><article><span>فرص 90+</span><strong>{radar.length}</strong></article></section>{(provider||scanned>0)&&<section className="decision-board panel"><div className="decision-main"><span>قرار ماهر هيرو</span><strong className={radar.length?"positive":"caution"}>{radar.length?"توجد فرص جاهزة للمراجعة":"لا توجد فرصة 90+ حاليًا"}</strong></div><div className="decision-stats"><div><span>أعلى تقييم</span><strong>{bestScore||"—"}</strong></div><div><span>الفرص</span><strong>{radar.length}</strong></div><div><span>السوق</span><strong>{marketOpen?"مفتوح":"مغلق"}</strong></div><div><span>المصدر</span><strong>{provider||"alpaca"}</strong></div></div></section>}{narrative&&<section className="panel ai-summary"><details open><summary>قراءة ماهر هيرو</summary><p>{narrative}</p></details></section>}{radar.length?<><section className="section-title opportunities"><div><small>تجاوزت 90/100</small><span>الفرص الحالية</span></div><b>{radar.length}</b></section><section className="cards">{radar.slice(0,6).map((p,i)=><StockCard key={p.symbol} pick={p} index={i}/>)}</section></>:scanned>0&&!loading&&<section className="empty-state panel"><strong>لا توجد فرصة 90+ حاليًا</strong><p>سيعيد الرادار الفحص تلقائيًا بعد 10 دقائق.</p></section>}</div><aside className="radar-sidebar panel"><div className="sidebar-head"><div><small>قائمة مباشرة</small><h3>رادار 90+</h3></div><span className={marketOpen?"pulse-dot active":"pulse-dot"}/></div><div className="sidebar-list">{radar.length?radar.map((p,i)=>{const plan=tradePlan(p,i);return <div className="radar-row" key={p.symbol}><div className="radar-row-top"><strong>{p.symbol}</strong><b>{p.score}</b></div><div className="radar-price"><span>شراء</span><strong>{p.price.toFixed(2)} $</strong></div><div className="radar-targets"><span>بيع 1: {plan.target1.toFixed(2)} $</span><span>بيع 2: {plan.target2.toFixed(2)} $</span><span>وقف: {plan.stop.toFixed(2)} $</span></div></div>}):<div className="sidebar-empty">لا توجد فرصة فوق 90 حاليًا.</div>}</div></aside></section>}
 
-  return (
-    <main>
-      <nav className="topbar"><div className="brand">MAHER HERO <span>AI</span></div><div className={`live ${marketOpen ? "is-live" : ""}`}><i /> {marketOpen ? "السوق الأمريكي مفتوح" : "السوق الأمريكي مغلق"}</div></nav>
+    {tab==="portfolio"&&<section><section className="portfolio-actions panel"><div><h2>محفظة ماهر هيرو</h2><p>تحديث كل دقيقة أثناء الجلسة مع تنبيه أفضل خروج.</p></div><div className="action-buttons"><button onClick={()=>setShowAdd(v=>!v)}>+ إضافة سهم</button><button className="secondary-button" onClick={refreshPortfolio} disabled={portfolioLoading}>{portfolioLoading?"جارٍ التحديث":"تحديث الآن"}</button><button className="secondary-button" onClick={requestNotifications}>تفعيل إشعارات المتصفح</button><label className="import-button">استيراد CSV<input type="file" accept=".csv" onChange={importCsv}/></label></div></section>{showAdd&&<form className="panel holding-form" onSubmit={submitHolding}><label>رمز السهم<input value={form.symbol} onChange={e=>setForm({...form,symbol:e.target.value})} placeholder="TNDM"/></label><label>سعر الشراء<input type="number" step="0.0001" value={form.buyPrice} onChange={e=>setForm({...form,buyPrice:e.target.value})}/></label><label>عدد الأسهم<input type="number" step="1" value={form.quantity} onChange={e=>setForm({...form,quantity:e.target.value})}/></label><label>تاريخ الشراء<input type="date" value={form.buyDate} onChange={e=>setForm({...form,buyDate:e.target.value})}/></label><label>عمولة الشراء<input type="number" step="0.01" value={form.buyFee} onChange={e=>setForm({...form,buyFee:e.target.value})}/></label><label>هدفك الخاص<input type="number" step="0.0001" value={form.customTarget} onChange={e=>setForm({...form,customTarget:e.target.value})}/></label><label className="wide">ملاحظة<input value={form.note} onChange={e=>setForm({...form,note:e.target.value})}/></label><button type="submit">حفظ السهم</button></form>}<section className="summary portfolio-summary"><article><span>قيمة المحفظة</span><strong>{money(portfolioValue)}</strong></article><article><span>الربح/الخسارة المفتوحة</span><strong className={totalPnl>=0?"positive":"negative"}>{money(totalPnl)}</strong></article><article><span>الربح المحقق</span><strong className={realized>=0?"positive":"negative"}>{money(realized)}</strong></article><article><span>الأسهم المتابعة</span><strong>{holdings.length}</strong></article></section><div className="portfolio-grid">{holdingViews.map(h=><article className={`holding-card ${signalClass(h.quote?.signal)}`} key={h.id}><div className="holding-head"><div><h3>{h.symbol}</h3><span>{h.longTerm?"استثمار طويل":"مضاربة"}</span></div><strong className={h.pnl>=0?"positive":"negative"}>{h.pnl>=0?"+":""}{money(h.pnl)}<small>{h.pnlPct.toFixed(2)}%</small></strong></div><div className={`holding-signal ${signalClass(h.quote?.signal)}`}>{h.status}</div><div className="holding-metrics"><div><span>سعر الشراء</span><b>{money(h.buyPrice)}</b></div><div><span>السعر الحالي</span><b>{h.quote?.price?money(h.quote.price):"—"}</b></div><div><span>الكمية</span><b>{h.quantity}</b></div><div><span>نقطة التعادل</span><b>{money(h.breakEven)}</b></div><div><span>الهدف الأول</span><b>{money(h.target1)}</b></div><div><span>الهدف الثاني</span><b>{money(h.target2)}</b></div><div><span>وقف حماية</span><b>{money(h.protectiveStop)}</b></div><div><span>RSI / MACD</span><b>{h.quote?.rsi?.toFixed(1)||"—"} / {h.quote?.macdSignal?indicatorLabel(h.quote.macdSignal):"—"}</b></div></div>{h.quote?.reasons?.length?<p className="holding-reason">{h.quote.reasons.join(" • ")}</p>:null}{h.note&&<p className="holding-note">ملاحظة: {h.note}</p>}<div className="holding-buttons"><button onClick={()=>sellHolding(h)}>تم البيع</button><button className="secondary-button" onClick={()=>toggleLongTerm(h.id)}>{h.longTerm?"إرجاع للمضاربة":"تجميد كاستثمار"}</button><button className="danger-button" onClick={()=>removeHolding(h.id)}>حذف</button></div></article>)}{!holdings.length&&<section className="empty-state panel"><strong>المحفظة فارغة</strong><p>أضف أول سهم لتبدأ المتابعة والتنبيهات.</p></section>}</div></section>}
 
-      <header className="hero"><div><div className="badge">Maher Hero AI — v3.0</div><h1>رادار الأسهم الأمريكي</h1><p>فحص تلقائي كل 10 دقائق أثناء جلسة السوق، مع عرض الفرص التي تتجاوز 90/100 وخطة الدخول والبيع.</p></div><aside className="market-box"><span>حالة الرادار</span><strong>{loading ? "جارٍ الفحص" : autoEnabled ? "مراقبة تلقائية" : "متوقف يدويًا"}</strong><small>آخر فحص: {lastScan}</small><small>الفحص القادم: {nextScanAt ? nextScanAt.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "عند افتتاح السوق"}</small></aside></header>
-
-      <section className="workspace">
-        <div className="main-column">
-          <section className="panel controls us-controls">
-            <label>رأس المال<input type="number" min="100" value={capital} onChange={(e) => setCapital(Number(e.target.value))} /></label>
-            <label>المخاطرة لكل صفقة %<input type="number" min="0.1" max="3" step="0.1" value={riskPct} onChange={(e) => setRiskPct(Number(e.target.value))} /></label>
-            <button onClick={() => analyze(false)} disabled={loading}>{loading ? "جارٍ فحص السوق..." : "فحص الآن"}</button>
-            <button className="secondary-button" onClick={() => setAutoEnabled((value) => !value)}>{autoEnabled ? "إيقاف الفحص التلقائي" : "تشغيل الفحص التلقائي"}</button>
-          </section>
-
-          {loading && <section className="scanner panel"><div className="scan-head"><strong>جارٍ تحليل السوق الأمريكي</strong><span>MACD • RSI • RVOL • الاختراق</span></div><div className="progress"><b /></div></section>}
-
-          <section className="summary"><article><span>رأس المال</span><strong>{capital.toLocaleString()} $</strong></article><article><span>المتاح للتداول</span><strong>{tradableCapital.toLocaleString()} $</strong></article><article><span>الأسهم المفحوصة</span><strong>{scanned || "—"}</strong></article><article><span>فرص 90+</span><strong>{radar.length}</strong></article></section>
-
-          {(provider || scanned > 0) && <section className="decision-board panel"><div className="decision-main"><span>قرار ماهر هيرو</span><strong className={radar.length ? "positive" : "caution"}>{radar.length ? "توجد فرص جاهزة للمراجعة" : "لا توجد فرصة 90+ حاليًا"}</strong><small>التنفيذ مشروط ببقاء السعر داخل منطقة الدخول وثبات الحجم.</small></div><div className="decision-stats"><div><span>أعلى تقييم</span><strong>{bestScore || "—"}</strong></div><div><span>فرص الرادار</span><strong>{radar.length}</strong></div><div><span>حالة السوق</span><strong>{marketOpen ? "مفتوح" : "مغلق"}</strong></div><div><span>المصدر</span><strong>{provider || "alpaca"}</strong></div></div></section>}
-
-          {error && <p className="error">{error}</p>}
-          {warning && <p className="warning-box">تنبيه البيانات: {warning}</p>}
-          {!clockReady && <p className="warning-box">جارٍ التحقق من حالة السوق...</p>}
-          {narrative && <section className="panel ai-summary"><div className="section-title"><div><small>نتيجة آخر فحص</small><span>قراءة ماهر هيرو</span></div><em>AI</em></div><details open><summary>عرض الملخص</summary><p>{narrative}</p></details></section>}
-
-          {!!radar.length && <><section className="section-title opportunities"><div><small>تجاوزت 90/100</small><span>الفرص الحالية</span></div><b>{radar.length}</b></section><section className="cards">{radar.slice(0, 6).map((pick, index) => <StockCard key={pick.symbol} pick={pick} index={index} />)}</section></>}
-          {!loading && scanned > 0 && !radar.length && <section className="empty-state panel"><strong>لا توجد فرصة 90+ حاليًا</strong><p>سيعيد الرادار الفحص تلقائيًا بعد 10 دقائق ما دام السوق مفتوحًا.</p></section>}
-        </div>
-
-        <aside className="radar-sidebar panel">
-          <div className="sidebar-head"><div><small>قائمة مباشرة</small><h3>رادار 90+</h3></div><span className={marketOpen ? "pulse-dot active" : "pulse-dot"} /></div>
-          <p className="sidebar-note">تتحدث تلقائيًا كل 10 دقائق أثناء الجلسة.</p>
-          <div className="sidebar-list">
-            {radar.length ? radar.map((pick, index) => { const plan = tradePlan(pick, index); const meta = pick as RadarPick; return <div className="radar-row" key={pick.symbol}><div className="radar-row-top"><strong>{pick.symbol}</strong><b>{pick.score}</b></div><div className="radar-price"><span>شراء</span><strong>{pick.price.toFixed(2)} $</strong></div><div className="radar-targets"><span>بيع 1: {plan.target1.toFixed(2)} $</span><span>بيع 2: {plan.target2.toFixed(2)} $</span><span>وقف: {plan.stop.toFixed(2)} $</span></div><small>منذ {new Date(meta.detectedAt).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })} • تحديث {new Date(meta.updatedAt).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}</small></div>; }) : <div className="sidebar-empty">لا توجد فرصة فوق 90 حاليًا.</div>}
-          </div>
-        </aside>
-      </section>
-
-      <footer>النتائج تحليلية وليست ضمانًا للربح. تحقق من السعر والسيولة في منصة التداول قبل التنفيذ.</footer>
-    </main>
-  );
+    {tab==="history"&&<section><section className="panel history-head"><div><h2>سجل الأرباح المحققة</h2><p>كل عملية بيع كاملة أو جزئية تحفظ هنا.</p></div><strong className={realized>=0?"positive":"negative"}>{money(realized)}</strong></section><div className="history-table panel"><div className="history-row header"><span>السهم</span><span>الكمية</span><span>الشراء</span><span>البيع</span><span>التاريخ</span><span>النتيجة</span></div>{sales.map(s=><div className="history-row" key={s.id}><b>{s.symbol}</b><span>{s.quantity}</span><span>{money(s.buyPrice)}</span><span>{money(s.sellPrice)}</span><span>{new Date(s.soldAt).toLocaleString("ar-SA")}</span><strong className={s.realized>=0?"positive":"negative"}>{money(s.realized)}</strong></div>)}{!sales.length&&<div className="sidebar-empty">لم تسجل عمليات بيع بعد.</div>}</div></section>}
+    <footer>النتائج تحليلية وليست ضمانًا للربح. تحقق من السعر والسيولة في منصة التداول قبل التنفيذ.</footer>
+  </main>;
 }
