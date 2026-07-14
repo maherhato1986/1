@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
 function authorize(request: Request) {
   const secret = process.env.CRON_SECRET;
   if (!secret) return true;
@@ -22,16 +25,20 @@ export async function GET(request: Request) {
     );
   }
 
-  const response = await fetch(`${server}/${encodeURIComponent(topic)}`, {
+  const response = await fetch(server, {
     method: "POST",
     headers: {
-      Title: "ماهر هيرو — اختبار الإشعارات",
-      Priority: "high",
-      Tags: "white_check_mark,chart_with_upwards_trend",
-      Click: siteUrl,
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "application/json; charset=utf-8",
     },
-    body: "تم ربط إشعارات ماهر هيرو بجوالك بنجاح. سيصل التنبيه فقط عند ظهور فرصة 95/100 أو أعلى.",
+    body: JSON.stringify({
+      topic,
+      title: "ماهر هيرو — اختبار الإشعارات",
+      message: "تم ربط إشعارات ماهر هيرو بجوالك بنجاح. سيصل التنبيه فقط عند ظهور فرصة 95/100 أو أعلى.",
+      priority: 4,
+      tags: ["white_check_mark", "chart_with_upwards_trend"],
+      click: siteUrl,
+    }),
+    cache: "no-store",
   });
 
   if (!response.ok) {
@@ -42,5 +49,10 @@ export async function GET(request: Request) {
     );
   }
 
-  return NextResponse.json({ ok: true, channel: "ntfy", message: "تم إرسال إشعار الاختبار." });
+  return NextResponse.json({
+    ok: true,
+    channel: "ntfy",
+    message: "تم إرسال إشعار الاختبار.",
+    timestamp: new Date().toISOString(),
+  });
 }
