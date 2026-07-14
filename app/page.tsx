@@ -22,6 +22,15 @@ type Pick = {
   breakdown?: Record<string, number>;
 };
 
+async function readApiResponse(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const text = await response.text();
+    throw new Error(`تعذر الوصول إلى خدمة الفحص (${response.status}). أعد المحاولة بعد اكتمال نشر Vercel. ${text.slice(0, 80)}`);
+  }
+  return response.json();
+}
+
 export default function Home() {
   const [market, setMarket] = useState<"US" | "SA">("US");
   const [capital, setCapital] = useState(5000);
@@ -53,7 +62,7 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ market, capital, riskPct }),
       });
-      const data = await response.json();
+      const data = await readApiResponse(response);
       if (!response.ok) throw new Error(data.error || "تعذر التحليل");
       setPicks(data.picks || []);
       setWatchlist(data.watchlist || []);
@@ -78,7 +87,7 @@ export default function Home() {
 
       <header className="hero">
         <div>
-          <div className="badge">Maher Hero AI — v2.0</div>
+          <div className="badge">Maher Hero AI — v2.1</div>
           <h1>غرفة عمليات الأسهم الذكية</h1>
           <p>فلترة السوق، تقييم الفرص، إدارة رأس المال، وتحديد الدخول والوقف والأهداف قبل التنفيذ.</p>
         </div>
@@ -91,7 +100,7 @@ export default function Home() {
 
       <section className="panel controls">
         <label>السوق
-          <select value={market} onChange={(e) => setMarket(e.target.value as "US" | "SA")}>
+          <select value={market} onChange={(e) => setMarket(e.target.value as "US" | "SA") }>
             <option value="US">السوق الأمريكي</option>
             <option value="SA">السوق السعودي</option>
           </select>
