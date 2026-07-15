@@ -1,0 +1,22 @@
+@media (min-width: 761px){
+  :root{color-scheme:light;background:#eef4f8;color:#102235}
+  body{background:linear-gradient(180deg,#f7fbfe 0,#eaf2f7 100%);color:#102235}
+  .topbar{background:rgba(255,255,255,.9);border-color:#d7e2ea}
+  .brand{color:#102235}.live{color:#52677a}
+  .hero h1{color:#102235}.hero p,.market-box span,.market-box small,.summary span,.source-note,footer{color:#5f7386}
+  .market-box,.panel,.stock-card,.summary article,.broker-table,.history-table{background:#fff;border-color:#d4e0e8;box-shadow:0 12px 34px rgba(51,78,99,.10)}
+  .tabbar{background:rgba(247,251,254,.94)}
+  .tabbar button,.secondary-button,input,select{background:#f4f8fb;color:#183047;border-color:#cbd9e3}
+  .tabbar button.active,button{color:#fff}
+  .indicator-grid div,.trade-grid div,.decision-stats div,.radar-row{background:#f5f9fc;border-color:#d7e3eb}
+  .indicator-grid span,.trade-grid span,.rank,.stock-name{color:#6c8193}
+  .indicator-grid strong,.trade-grid strong,.stock-card h2,.card-top p{color:#173047}
+  .data-disclaimer{background:#fff8df!important;border-color:#e7c969!important;color:#634b05!important}
+  .error{color:#fff}
+  .broker-head,.broker-row,.history-row{color:#1d354a;border-color:#dce6ed}
+  .broker-row:nth-child(even),.history-row:nth-child(even){background:#f8fbfd}
+  .score-badge.watch{color:#9a6500}
+  .frame-chip{background:#eef4f8;border-color:#cbdbe6;color:#334e63}
+  .frame-chip.up{background:#e7f8f0;border-color:#9ed8bd;color:#08734d}
+  .frame-chip.down{background:#fdeced;border-color:#e6b4b7;color:#a12832}
+}
