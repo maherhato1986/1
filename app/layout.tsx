@@ -5,6 +5,7 @@ import "./portfolio-table.css";
 import "./portfolio-layout-fix.css";
 import "./visual-polish.css";
 import "./watchlist.css";
+import "./desktop-light.css";
 
 export const metadata: Metadata = {
   title: "ماهر هيرو | محلل الأسهم الذكي",
