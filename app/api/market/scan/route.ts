@@ -1,105 +1,16 @@
 import { NextResponse } from "next/server";
 import { Bar, completedBars, macdSignal, rsi, sma, trueRangeAverage } from "@/lib/indicators";
-import { StockSnapshot } from "@/lib/maherHero";
+import { Direction, FrameSignal, StockSnapshot } from "@/lib/maherHero";
 import { MAHER_HERO_WATCHLIST } from "@/lib/maherHeroWatchlist";
 
-export const dynamic = "force-dynamic";
-export const runtime = "nodejs";
-export const maxDuration = 60;
-
-type BarsResponse = { bars?: Record<string, Bar[]>; next_page_token?: string | null };
-const baseUrl = "https://data.alpaca.markets";
-
-function headers() {
-  const key = process.env.ALPACA_API_KEY;
-  const secret = process.env.ALPACA_API_SECRET;
-  if (!key || !secret) return null;
-  return { "APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret };
-}
-
-async function fetchJson<T>(url: string, authHeaders: Record<string, string>): Promise<T> {
-  const response = await fetch(url, { headers: authHeaders, cache: "no-store", signal: AbortSignal.timeout(15000) });
-  const contentType = response.headers.get("content-type") || "";
-  if (!response.ok) {
-    const details = await response.text();
-    throw new Error(`تعذر جلب بيانات السوق (${response.status}): ${details.slice(0, 180)}`);
-  }
-  if (!contentType.includes("application/json")) {
-    const details = await response.text();
-    throw new Error(`مزود السوق أعاد استجابة غير صالحة: ${details.slice(0, 120)}`);
-  }
-  return response.json() as Promise<T>;
-}
-
-function breakoutContext(bars: Bar[], price: number, changePct: number) {
-  const current = bars.at(-1)!;
-  const prior = bars.slice(-21, -1);
-  const previousResistance = Math.max(...prior.map((bar) => bar.h));
-  const recentLow = Math.min(...bars.slice(-4).map((bar) => bar.l));
-  let breakout: StockSnapshot["breakout"] = "none";
-  if (changePct >= 25) breakout = "late";
-  else if (current.c > previousResistance && changePct <= 12) breakout = "early";
-  else if (recentLow <= previousResistance * 1.006 && current.c >= previousResistance && changePct <= 15) breakout = "retest";
-  const historicalHighsAbovePrice = bars.slice(0, -21).map((bar) => bar.h).filter((high) => high > price * 1.005);
-  const nextResistance = historicalHighsAbovePrice.length ? Math.min(...historicalHighsAbovePrice) : null;
-  return { breakout, nextResistance };
-}
-
-function buildSnapshot(symbol: string, rawBars: Bar[]): StockSnapshot | null {
-  const bars = completedBars(rawBars, 5);
-  if (bars.length < 40) return null;
-  const closes = bars.map((bar) => bar.c);
-  const volumes = bars.map((bar) => bar.v);
-  const current = bars.at(-1)!;
-  const currentDay = new Date(current.t).toISOString().slice(0, 10);
-  const previousSessionBars = bars.slice(0, -1).filter((bar) => new Date(bar.t).toISOString().slice(0, 10) !== currentDay);
-  const previousClose = previousSessionBars.at(-1)?.c ?? bars.at(-2)!.c;
-  const price = current.c;
-  if (!price || price < 0.1 || price > 1000) return null;
-  const changePct = ((price - previousClose) / previousClose) * 100;
-  const averageVolume = Math.max(1, sma(volumes.slice(-21, -1), 20));
-  const volumeRatio = current.v / averageVolume;
-  const ema20 = sma(closes, 20);
-  const trend = current.c > ema20 * 1.004 ? "up" : current.c < ema20 * 0.996 ? "down" : "sideways";
-  const atr = trueRangeAverage(bars, 14);
-  const { breakout, nextResistance } = breakoutContext(bars, price, changePct);
-  const fallbackDistance = Math.max(3.5, Math.min(10, (atr / price) * 200));
-  const resistanceDistancePct = nextResistance ? ((nextResistance - price) / price) * 100 : fallbackDistance;
-  const stopDistancePct = Math.min(7, Math.max(1.2, (atr / price) * 100 * 1.25));
-  const intradayHigh = Math.max(...bars.slice(-78).map((bar) => bar.h));
-  return {
-    symbol, name: symbol, market: "US", price, changePct, sessionGainPct: changePct,
-    pullbackFromHighPct: intradayHigh > 0 ? ((intradayHigh - price) / intradayHigh) * 100 : 0,
-    volumeRatio, rsi: rsi(closes, 14), macdSignal: macdSignal(closes), trend, breakout,
-    resistanceDistancePct: Math.max(0, resistanceDistancePct), stopDistancePct,
-  };
-}
-
-export async function GET(request: Request) {
-  const authHeaders = headers();
-  if (!authHeaders) return NextResponse.json({ mode: "demo", error: "أضف مفاتيح Alpaca في Vercel لتفعيل البيانات الحقيقية.", stocks: [] });
-  try {
-    const url = new URL(request.url);
-    const requested = url.searchParams.get("symbol")?.trim().toUpperCase();
-    const symbols = requested && MAHER_HERO_WATCHLIST.includes(requested as never) ? [requested] : [...MAHER_HERO_WATCHLIST];
-    const start = new Date(Date.now() - 1000 * 60 * 60 * 24 * 10).toISOString();
-    const barsUrl = new URL(`${baseUrl}/v2/stocks/bars`);
-    barsUrl.searchParams.set("symbols", symbols.join(","));
-    barsUrl.searchParams.set("timeframe", "5Min");
-    barsUrl.searchParams.set("start", start);
-    barsUrl.searchParams.set("limit", "10000");
-    barsUrl.searchParams.set("adjustment", "raw");
-    barsUrl.searchParams.set("feed", "iex");
-    const barsData = await fetchJson<BarsResponse>(barsUrl.toString(), authHeaders);
-    const stocks = symbols.map((symbol) => buildSnapshot(symbol, barsData.bars?.[symbol] ?? [])).filter((stock): stock is StockSnapshot => Boolean(stock));
-    return NextResponse.json({
-      mode: "live", provider: "alpaca-watchlist", scanned: symbols.length, analyzed: stocks.length,
-      stocks, watchlist: symbols,
-      warning: stocks.length < symbols.length ? `تعذر بناء تحليل كامل لـ ${symbols.length - stocks.length} سهم بسبب نقص البيانات.` : undefined,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "تعذر فحص قائمة ماهر هيرو";
-    return NextResponse.json({ mode: "error", error: message, stocks: [] }, { status: 502 });
-  }
-}
+export const dynamic="force-dynamic";export const runtime="nodejs";export const maxDuration=60;
+type BarsResponse={bars?:Record<string,Bar[]>};const baseUrl="https://data.alpaca.markets";
+function headers(){const key=process.env.ALPACA_API_KEY,secret=process.env.ALPACA_API_SECRET;return key&&secret?{"APCA-API-KEY-ID":key,"APCA-API-SECRET-KEY":secret}:null}
+async function fetchJson<T>(url:string,h:Record<string,string>):Promise<T>{const r=await fetch(url,{headers:h,cache:"no-store",signal:AbortSignal.timeout(18000)});if(!r.ok)throw new Error(`تعذر جلب بيانات السوق (${r.status}): ${(await r.text()).slice(0,160)}`);return r.json() as Promise<T>}
+async function fetchBars(symbols:string[],timeframe:string,days:number,h:Record<string,string>){const u=new URL(`${baseUrl}/v2/stocks/bars`);u.searchParams.set("symbols",symbols.join(","));u.searchParams.set("timeframe",timeframe);u.searchParams.set("start",new Date(Date.now()-days*86400000).toISOString());u.searchParams.set("limit","10000");u.searchParams.set("adjustment","raw");u.searchParams.set("feed","iex");return (await fetchJson<BarsResponse>(u.toString(),h)).bars??{}}
+function direction(closes:number[],period=20):Direction{if(closes.length<period+2)return"sideways";const avg=sma(closes,period),last=closes.at(-1)!;return last>avg*1.008?"up":last<avg*.992?"down":"sideways"}
+function frame(raw:Bar[],minutes:number,period=20):FrameSignal{const bars=completedBars(raw,minutes),closes=bars.map(b=>b.c);return{trend:direction(closes,period),rsi:closes.length>=15?rsi(closes,14):50,macdSignal:closes.length>=35?macdSignal(closes):"neutral"}}
+function weeklyFromDaily(raw:Bar[]):FrameSignal{const bars=completedBars(raw,1440),weeks:Bar[]=[];for(let i=0;i<bars.length;i+=5){const g=bars.slice(i,i+5);if(!g.length)continue;weeks.push({t:g[0].t,o:g[0].o,h:Math.max(...g.map(x=>x.h)),l:Math.min(...g.map(x=>x.l)),c:g.at(-1)!.c,v:g.reduce((s,x)=>s+x.v,0)})}const closes=weeks.map(b=>b.c);return{trend:direction(closes,10),rsi:closes.length>=15?rsi(closes,14):50,macdSignal:closes.length>=35?macdSignal(closes):"neutral"}}
+function breakoutContext(bars:Bar[],price:number,changePct:number){const current=bars.at(-1)!,prior=bars.slice(-21,-1),res=Math.max(...prior.map(b=>b.h)),recentLow=Math.min(...bars.slice(-4).map(b=>b.l));let breakout:StockSnapshot["breakout"]="none";if(changePct>=25)breakout="late";else if(current.c>res&&changePct<=12)breakout="early";else if(recentLow<=res*1.006&&current.c>=res&&changePct<=15)breakout="retest";const highs=bars.slice(0,-21).map(b=>b.h).filter(h=>h>price*1.005);return{breakout,nextResistance:highs.length?Math.min(...highs):null}}
+function buildSnapshot(symbol:string,raw5:Bar[],raw15:Bar[],rawHour:Bar[],rawDay:Bar[]):StockSnapshot|null{const bars=completedBars(raw5,5);if(bars.length<40)return null;const closes=bars.map(b=>b.c),volumes=bars.map(b=>b.v),current=bars.at(-1)!,day=new Date(current.t).toISOString().slice(0,10),prev=bars.slice(0,-1).filter(b=>new Date(b.t).toISOString().slice(0,10)!==day).at(-1)?.c??bars.at(-2)!.c,price=current.c;if(!price||price<.1||price>1000)return null;const changePct=(price-prev)/prev*100,averageVolume=Math.max(1,sma(volumes.slice(-21,-1),20)),volumeRatio=current.v/averageVolume,atr=trueRangeAverage(bars,14),{breakout,nextResistance}=breakoutContext(bars,price,changePct),fallback=Math.max(3.5,Math.min(10,atr/price*200)),intradayHigh=Math.max(...bars.slice(-78).map(b=>b.h));const frames={weekly:weeklyFromDaily(rawDay),daily:frame(rawDay,1440,20),hourly:frame(rawHour,60,20),m15:frame(raw15,15,20),m5:frame(raw5,5,20)};return{symbol,name:symbol,market:"US",price,changePct,sessionGainPct:changePct,pullbackFromHighPct:intradayHigh>0?(intradayHigh-price)/intradayHigh*100:0,volumeRatio,rsi:frames.m5.rsi,macdSignal:frames.m5.macdSignal,trend:frames.m5.trend,breakout,resistanceDistancePct:Math.max(0,nextResistance?(nextResistance-price)/price*100:fallback),stopDistancePct:Math.min(7,Math.max(1.2,atr/price*100*1.25)),frames}}
+export async function GET(request:Request){const h=headers();if(!h)return NextResponse.json({mode:"demo",error:"أضف مفاتيح Alpaca في Vercel.",stocks:[]});try{const requested=new URL(request.url).searchParams.get("symbol")?.trim().toUpperCase(),symbols=requested&&MAHER_HERO_WATCHLIST.includes(requested as never)?[requested]:[...MAHER_HERO_WATCHLIST];const [b5,b15,b60,b1d]=await Promise.all([fetchBars(symbols,"5Min",10,h),fetchBars(symbols,"15Min",30,h),fetchBars(symbols,"1Hour",120,h),fetchBars(symbols,"1Day",420,h)]);const stocks=symbols.map(s=>buildSnapshot(s,b5[s]??[],b15[s]??[],b60[s]??[],b1d[s]??[])).filter((x):x is StockSnapshot=>Boolean(x));return NextResponse.json({mode:"live",provider:"alpaca-multi-timeframe",scanned:symbols.length,analyzed:stocks.length,stocks,watchlist:symbols,warning:stocks.length<symbols.length?`تعذر بناء تحليل كامل لـ ${symbols.length-stocks.length} سهم بسبب نقص البيانات.`:undefined,timestamp:new Date().toISOString()})}catch(e){return NextResponse.json({mode:"error",error:e instanceof Error?e.message:"تعذر الفحص",stocks:[]},{status:502})}}
