@@ -30,6 +30,58 @@ async function readJsonResponse(response: Response) {
   return response.json();
 }
 
+function roundPrice(value: number) {
+  const digits = value < 1 ? 4 : value < 10 ? 3 : 2;
+  return Number(value.toFixed(digits));
+}
+
+function tradePlan(stock: StockSnapshot & ReturnType<typeof scoreMaherHero>) {
+  const price = stock.price;
+  const stopPct = Math.max(1.2, Math.min(stock.stopDistancePct || 3, 6));
+  const entryPadding = stock.breakout === "retest" ? 0.002 : stock.breakout === "early" ? 0.004 : 0.008;
+  const entryLow = price * (1 - entryPadding);
+  const entryHigh = price * (1 + Math.min(entryPadding, 0.006));
+  const stopLoss = price * (1 - stopPct / 100);
+  const risk = Math.max(price - stopLoss, price * 0.012);
+  const resistanceTarget = price * (1 + Math.max(2, stock.resistanceDistancePct) / 100);
+  const target1 = Math.min(resistanceTarget, price + risk * 1.5);
+  const target2 = Math.max(target1, Math.min(price + risk * 2.5, price * 1.12));
+  const target3 = Math.max(target2, Math.min(price + risk * 3.5, price * 1.18));
+
+  let buyTiming = "انتظار تأكيد؛ لا تدخل الآن";
+  if (stock.score >= 90 && stock.breakout === "early") buyTiming = "بعد إغلاق شمعة 5 دقائق فوق الاختراق مع ارتفاع الحجم";
+  else if (stock.score >= 85 && stock.breakout === "retest") buyTiming = "عند ثبات إعادة الاختبار وظهور شمعة ارتداد على 5 دقائق";
+  else if (stock.trend === "up" && stock.macdSignal === "bullish") buyTiming = "راقب أول 30–90 دقيقة وانتظر اختراقًا أو إعادة اختبار واضحة";
+
+  let sellTiming = "لا توجد صفقة؛ البيع غير مطبق";
+  if (stock.score >= 85) sellTiming = "بيع جزئي عند الهدف الأول، ثم حماية الباقي بوقف متحرك";
+  if (stock.score >= 90) sellTiming = "بيع 40% عند الهدف الأول، 40% عند الثاني، والباقي بوقف متحرك";
+
+  const preferredSession = stock.volumeRatio >= 2
+    ? "أول 90 دقيقة بعد افتتاح نيويورك"
+    : stock.breakout === "retest"
+      ? "منتصف الجلسة بعد هدوء الافتتاح وتأكيد إعادة الاختبار"
+      : "راقبه خلال الجلسة ولا تدخل دون زيادة واضحة في السيولة";
+
+  const invalidation = stock.resistanceDistancePct < 2
+    ? "إلغاء الدخول لأن المقاومة قريبة ما لم يغلق فوقها بحجم قوي"
+    : `إلغاء الدخول بكسر ${roundPrice(stopLoss)} أو ضعف الحجم مع انعكاس MACD`;
+
+  return {
+    entryLow: roundPrice(entryLow),
+    entryHigh: roundPrice(entryHigh),
+    stopLoss: roundPrice(stopLoss),
+    target1: roundPrice(target1),
+    target2: roundPrice(target2),
+    target3: roundPrice(target3),
+    buyTiming,
+    sellTiming,
+    preferredSession,
+    invalidation,
+    riskReward: Number(((target2 - price) / Math.max(price - stopLoss, 0.0001)).toFixed(2)),
+  };
+}
+
 export async function POST(request: Request) {
   try {
     const key = clientKey(request);
@@ -54,14 +106,16 @@ export async function POST(request: Request) {
 
     const stocks = marketData.stocks as StockSnapshot[];
     const ranked = stocks
-      .map((stock) => ({ ...stock, ...scoreMaherHero(stock) }))
+      .map((stock) => {
+        const scored = { ...stock, ...scoreMaherHero(stock) };
+        return { ...scored, ...tradePlan(scored) };
+      })
       .sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio);
 
     const opportunities90 = ranked.filter((stock) => stock.score >= 90);
-    const bestCandidates = ranked.slice(0, 5);
     const localMessage = opportunities90.length
-      ? `تم رصد ${opportunities90.length} فرصة بدرجة 90/100 أو أعلى. يعرض الرادار أفضل خمسة أسهم من قائمة ماهر هيرو.`
-      : `لا توجد فرصة بدرجة 90/100 أو أعلى حاليًا. يعرض الرادار أفضل خمسة أسهم نسبيًا بدل إظهار نتيجة فارغة.`;
+      ? `تم رصد ${opportunities90.length} فرصة بدرجة 90/100 أو أعلى. تعرض الصفحة خطة جميع أسهم القائمة.`
+      : "لا توجد فرصة بدرجة 90/100 أو أعلى حاليًا. تعرض الصفحة جميع الأسهم مع شروط الانتظار والدخول المشروط.";
 
     if (!process.env.OPENAI_API_KEY || input.automatic) {
       return NextResponse.json({
@@ -70,7 +124,7 @@ export async function POST(request: Request) {
         scanned: marketData.scanned,
         analyzed: marketData.analyzed ?? ranked.length,
         message: localMessage,
-        picks: bestCandidates,
+        picks: ranked,
         opportunities90,
         opportunityCount: opportunities90.length,
         warning: marketData.warning,
@@ -86,12 +140,11 @@ export async function POST(request: Request) {
         input: [
           {
             role: "system",
-            content:
-              "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. رتّب أفضل المرشحين، ووضّح بصدق هل توجد فرصة 90/100 أو أعلى. اذكر شروط إلغاء الدخول وأن التنفيذ مشروط وليس ضمانًا للربح.",
+            content: "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. لخّص أفضل خمسة مرشحين وشروط إلغاء الدخول، ولا تعتبر أي نتيجة ضمانًا للربح.",
           },
           {
             role: "user",
-            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, opportunityCount: opportunities90.length, topCandidates: bestCandidates }),
+            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, opportunityCount: opportunities90.length, topCandidates: ranked.slice(0, 5) }),
           },
         ],
       });
@@ -101,7 +154,7 @@ export async function POST(request: Request) {
         provider: marketData.provider,
         scanned: marketData.scanned,
         analyzed: marketData.analyzed ?? ranked.length,
-        picks: bestCandidates,
+        picks: ranked,
         opportunities90,
         opportunityCount: opportunities90.length,
         narrative: response.output_text || localMessage,
@@ -116,7 +169,7 @@ export async function POST(request: Request) {
         provider: marketData.provider,
         scanned: marketData.scanned,
         analyzed: marketData.analyzed ?? ranked.length,
-        picks: bestCandidates,
+        picks: ranked,
         opportunities90,
         opportunityCount: opportunities90.length,
         message: `${localMessage} تعذر تشغيل الشرح الذكي: ${details.slice(0, 180)}`,
