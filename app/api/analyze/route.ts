@@ -68,6 +68,7 @@ function tradePlan(stock: StockSnapshot & ReturnType<typeof scoreMaherHero>) {
     : `إلغاء الدخول بكسر ${roundPrice(stopLoss)} أو ضعف الحجم مع انعكاس MACD`;
 
   return {
+    available: true,
     entryLow: roundPrice(entryLow),
     entryHigh: roundPrice(entryHigh),
     stopLoss: roundPrice(stopLoss),
@@ -79,6 +80,40 @@ function tradePlan(stock: StockSnapshot & ReturnType<typeof scoreMaherHero>) {
     preferredSession,
     invalidation,
     riskReward: Number(((target2 - price) / Math.max(price - stopLoss, 0.0001)).toFixed(2)),
+  };
+}
+
+function unavailableStock(symbol: string) {
+  return {
+    symbol,
+    name: symbol,
+    market: "US" as const,
+    price: 0,
+    changePct: 0,
+    volumeRatio: 0,
+    rsi: 0,
+    macdSignal: "neutral" as const,
+    trend: "sideways" as const,
+    breakout: "none" as const,
+    resistanceDistancePct: 0,
+    stopDistancePct: 0,
+    score: 0,
+    classification: "بيانات غير مكتملة",
+    reasons: [],
+    warnings: ["لم تتوفر شموع كافية من مزود السوق لهذا السهم في الفحص الحالي"],
+    breakdown: { trend: 0, macd: 0, rsi: 0, volume: 0, breakout: 0, resistance: 0, risk: 0 },
+    available: false,
+    entryLow: 0,
+    entryHigh: 0,
+    stopLoss: 0,
+    target1: 0,
+    target2: 0,
+    target3: 0,
+    buyTiming: "انتظار تحديث البيانات؛ لا يوجد دخول محسوب الآن",
+    sellTiming: "غير مطبق حتى اكتمال البيانات",
+    preferredSession: "أعد الفحص أثناء الجلسة الأمريكية أو بعد توفر بيانات كافية",
+    invalidation: "لا تعتمد أي مستوى قبل اكتمال البيانات",
+    riskReward: 0,
   };
 }
 
@@ -105,32 +140,37 @@ export async function POST(request: Request) {
     }
 
     const stocks = marketData.stocks as StockSnapshot[];
-    const ranked = stocks
+    const analyzed = stocks
       .map((stock) => {
         const scored = { ...stock, ...scoreMaherHero(stock) };
         return { ...scored, ...tradePlan(scored) };
       })
       .sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio);
 
-    const opportunities90 = ranked.filter((stock) => stock.score >= 90);
+    const analyzedSymbols = new Set(analyzed.map((stock) => stock.symbol));
+    const fullWatchlist: string[] = Array.isArray(marketData.watchlist) ? marketData.watchlist : analyzed.map((stock) => stock.symbol);
+    const unavailable = fullWatchlist.filter((symbol) => !analyzedSymbols.has(symbol)).map(unavailableStock);
+    const ranked = [...analyzed, ...unavailable];
+    const opportunities90 = analyzed.filter((stock) => stock.score >= 90);
     const localMessage = opportunities90.length
-      ? `تم رصد ${opportunities90.length} فرصة بدرجة 90/100 أو أعلى. تعرض الصفحة خطة جميع أسهم القائمة.`
-      : "لا توجد فرصة بدرجة 90/100 أو أعلى حاليًا. تعرض الصفحة جميع الأسهم مع شروط الانتظار والدخول المشروط.";
+      ? `تم رصد ${opportunities90.length} فرصة بدرجة 90/100 أو أعلى. تعرض الصفحة كامل القائمة وعددها ${ranked.length} سهمًا.`
+      : `لا توجد فرصة بدرجة 90/100 أو أعلى حاليًا. تعرض الصفحة كامل القائمة وعددها ${ranked.length} سهمًا، مع توضيح الأسهم التي لم تكتمل بياناتها.`;
+
+    const basePayload = {
+      provider: marketData.provider,
+      scanned: fullWatchlist.length,
+      analyzed: analyzed.length,
+      unavailableCount: unavailable.length,
+      picks: ranked,
+      opportunities90,
+      opportunityCount: opportunities90.length,
+      warning: unavailable.length ? `تعذر بناء تحليل كامل لـ ${unavailable.length} سهم، لكنها ما زالت ظاهرة في القائمة بوضوح.` : marketData.warning,
+      timestamp: marketData.timestamp || new Date().toISOString(),
+      threshold: 90,
+    };
 
     if (!process.env.OPENAI_API_KEY || input.automatic) {
-      return NextResponse.json({
-        mode: "local",
-        provider: marketData.provider,
-        scanned: marketData.scanned,
-        analyzed: marketData.analyzed ?? ranked.length,
-        message: localMessage,
-        picks: ranked,
-        opportunities90,
-        opportunityCount: opportunities90.length,
-        warning: marketData.warning,
-        timestamp: marketData.timestamp || new Date().toISOString(),
-        threshold: 90,
-      });
+      return NextResponse.json({ mode: "local", message: localMessage, ...basePayload });
     }
 
     try {
@@ -144,39 +184,15 @@ export async function POST(request: Request) {
           },
           {
             role: "user",
-            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, opportunityCount: opportunities90.length, topCandidates: ranked.slice(0, 5) }),
+            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, opportunityCount: opportunities90.length, topCandidates: analyzed.slice(0, 5) }),
           },
         ],
       });
 
-      return NextResponse.json({
-        mode: "openai",
-        provider: marketData.provider,
-        scanned: marketData.scanned,
-        analyzed: marketData.analyzed ?? ranked.length,
-        picks: ranked,
-        opportunities90,
-        opportunityCount: opportunities90.length,
-        narrative: response.output_text || localMessage,
-        warning: marketData.warning,
-        timestamp: marketData.timestamp || new Date().toISOString(),
-        threshold: 90,
-      });
+      return NextResponse.json({ mode: "openai", narrative: response.output_text || localMessage, ...basePayload });
     } catch (openAIError) {
       const details = openAIError instanceof Error ? openAIError.message : "تعذر الاتصال بخدمة OpenAI";
-      return NextResponse.json({
-        mode: "local-fallback",
-        provider: marketData.provider,
-        scanned: marketData.scanned,
-        analyzed: marketData.analyzed ?? ranked.length,
-        picks: ranked,
-        opportunities90,
-        opportunityCount: opportunities90.length,
-        message: `${localMessage} تعذر تشغيل الشرح الذكي: ${details.slice(0, 180)}`,
-        warning: marketData.warning,
-        timestamp: marketData.timestamp || new Date().toISOString(),
-        threshold: 90,
-      });
+      return NextResponse.json({ mode: "local-fallback", message: `${localMessage} تعذر تشغيل الشرح الذكي: ${details.slice(0, 180)}`, ...basePayload });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "تعذر تحليل البيانات";
