@@ -9,7 +9,7 @@ export const maxDuration = 60;
 type BarsResponse = { bars?: Record<string, Bar[]>; next_page_token?: string | null };
 const baseUrl = "https://data.alpaca.markets";
 
-export const MAHER_HERO_WATCHLIST = [
+const MAHER_HERO_WATCHLIST = [
   "TNDM", "ETOR", "JLHL", "EAH", "BBAR", "AMWL", "GMM", "JZXN", "IFBD", "CCC",
   "OPEN", "PYPL", "FIG", "TGHL", "KLXE", "IBKR", "HPE", "MCHP", "OXY", "LVS", "BKR", "VLO",
 ] as const;
