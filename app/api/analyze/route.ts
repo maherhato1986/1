@@ -57,20 +57,22 @@ export async function POST(request: Request) {
       .map((stock) => ({ ...stock, ...scoreMaherHero(stock) }))
       .sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio);
 
-    const picks = ranked.filter((stock) => stock.score >= 90).slice(0, 10);
-    const watchlist = ranked.filter((stock) => stock.score < 90).slice(0, 5);
-    const localMessage = picks.length
-      ? `تم رصد ${picks.length} فرصة بدرجة 90/100 أو أعلى. يجب التأكد من بقاء السعر داخل منطقة الدخول قبل التنفيذ.`
-      : "لا توجد فرصة أمريكية بدرجة 90/100 أو أعلى في الفحص الحالي.";
+    const opportunities90 = ranked.filter((stock) => stock.score >= 90);
+    const bestCandidates = ranked.slice(0, 5);
+    const localMessage = opportunities90.length
+      ? `تم رصد ${opportunities90.length} فرصة بدرجة 90/100 أو أعلى. يعرض الرادار أفضل خمسة أسهم من قائمة ماهر هيرو.`
+      : `لا توجد فرصة بدرجة 90/100 أو أعلى حاليًا. يعرض الرادار أفضل خمسة أسهم نسبيًا بدل إظهار نتيجة فارغة.`;
 
     if (!process.env.OPENAI_API_KEY || input.automatic) {
       return NextResponse.json({
         mode: "local",
         provider: marketData.provider,
         scanned: marketData.scanned,
+        analyzed: marketData.analyzed ?? ranked.length,
         message: localMessage,
-        picks,
-        watchlist,
+        picks: bestCandidates,
+        opportunities90,
+        opportunityCount: opportunities90.length,
         warning: marketData.warning,
         timestamp: marketData.timestamp || new Date().toISOString(),
         threshold: 90,
@@ -85,11 +87,11 @@ export async function POST(request: Request) {
           {
             role: "system",
             content:
-              "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. اشرح فرص 90/100 أو أعلى وشروط إلغاء الدخول، واذكر أن التنفيذ مشروط وليس ضمانًا للربح.",
+              "أنت تشرح نتائج محرك ماهر هيرو فقط ولا تغيّر درجاته ولا تخترع أخبارًا أو أسعارًا. رتّب أفضل المرشحين، ووضّح بصدق هل توجد فرصة 90/100 أو أعلى. اذكر شروط إلغاء الدخول وأن التنفيذ مشروط وليس ضمانًا للربح.",
           },
           {
             role: "user",
-            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, picks, topCandidates: ranked.slice(0, 3) }),
+            content: JSON.stringify({ market: "US", capital: input.capital, riskPct: input.riskPct, opportunityCount: opportunities90.length, topCandidates: bestCandidates }),
           },
         ],
       });
@@ -98,8 +100,10 @@ export async function POST(request: Request) {
         mode: "openai",
         provider: marketData.provider,
         scanned: marketData.scanned,
-        picks,
-        watchlist,
+        analyzed: marketData.analyzed ?? ranked.length,
+        picks: bestCandidates,
+        opportunities90,
+        opportunityCount: opportunities90.length,
         narrative: response.output_text || localMessage,
         warning: marketData.warning,
         timestamp: marketData.timestamp || new Date().toISOString(),
@@ -111,8 +115,10 @@ export async function POST(request: Request) {
         mode: "local-fallback",
         provider: marketData.provider,
         scanned: marketData.scanned,
-        picks,
-        watchlist,
+        analyzed: marketData.analyzed ?? ranked.length,
+        picks: bestCandidates,
+        opportunities90,
+        opportunityCount: opportunities90.length,
         message: `${localMessage} تعذر تشغيل الشرح الذكي: ${details.slice(0, 180)}`,
         warning: marketData.warning,
         timestamp: marketData.timestamp || new Date().toISOString(),
