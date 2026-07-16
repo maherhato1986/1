@@ -7,6 +7,7 @@ import "./visual-polish.css";
 import "./watchlist.css";
 import "./desktop-light.css";
 import "./pro-dashboard.css";
+import "./site-nav.css";
 
 export const metadata: Metadata = {
   title: "ماهر هيرو | محلل الأسهم الذكي",
@@ -16,7 +17,13 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="ar" dir="rtl">
-      <body>{children}</body>
+      <body>
+        {children}
+        <nav className="site-quick-nav" aria-label="التنقل السريع">
+          <a href="/">غرفة العمليات</a>
+          <a href="/profits">الأرباح المحققة</a>
+        </nav>
+      </body>
     </html>
   );
 }
