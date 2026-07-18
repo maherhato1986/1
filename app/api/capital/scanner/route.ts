@@ -35,10 +35,11 @@ export async function GET(request: Request) {
   }
   try {
     const symbols = universe();
-    const [stocks, accounts] = await Promise.all([
+    const [scan, accounts] = await Promise.all([
       scanCapitalSymbols(symbols),
       capitalRequest<AccountsResponse>("/accounts").catch(() => ({ accounts: [] })),
     ]);
+    const stocks = scan.candidates;
     const opportunities = stocks.map((stock) => {
       const hero = scoreMaherHero(stock);
       let score = hero.score;
@@ -49,9 +50,12 @@ export async function GET(request: Request) {
       const actionStatus = score >= 90 && ["early", "retest"].includes(stock.breakout) ? "ready" : score >= 80 ? "near" : "watch";
       return { ...stock, ...hero, score, warnings, ...plan, actionStatus, signalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
     }).sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio).slice(0, 10);
+    const diagnostic = scan.diagnostics[0];
     return NextResponse.json({
       mode: capitalMode(), provider: "capital.com", scanned: symbols.length, analyzed: stocks.length,
       opportunities, account: accounts.accounts?.[0] ?? null, timestamp: new Date().toISOString(), refreshAfterSeconds: 60,
+      error: stocks.length ? undefined : diagnostic ? `${diagnostic.symbol}: ${diagnostic.error}` : "لم تتوفر بيانات للتحليل.",
+      diagnostics: scan.diagnostics.slice(0, 12),
     }, { headers: { ...cors, "Cache-Control": "no-store" } });
   } catch (error) {
     return NextResponse.json({ mode: "error", error: error instanceof Error ? error.message : "تعذر فحص Capital.", opportunities: [] }, { status: 502, headers: cors });

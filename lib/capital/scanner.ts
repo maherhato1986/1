@@ -87,19 +87,22 @@ function snapshot(symbol: string, name: string, epic: string, status: string, sp
 
 export async function scanCapitalSymbols(symbols: string[]) {
   const candidates: CapitalCandidate[] = [];
+  const diagnostics: Array<{ symbol: string; stage: string; error: string }> = [];
   for (const symbol of symbols) {
     try {
       const market = await resolveEpic(symbol);
-      if (!market) continue;
+      if (!market) { diagnostics.push({ symbol, stage: "resolve", error: "لم يُعثر على رمز مطابق في Capital" }); continue; }
       await wait(115);
       const daily = await capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=DAY&max=420`);
       await wait(115);
       const five = await capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=MINUTE_5&max=1000`);
       const built = snapshot(symbol, market.name, market.epic, market.status, market.spreadPct, bars(five), bars(daily));
       if (built) candidates.push(built);
-    } catch {
+      else diagnostics.push({ symbol, stage: "bars", error: `بيانات غير كافية: يومي ${daily.prices?.length ?? 0}، 5 دقائق ${five.prices?.length ?? 0}` });
+    } catch (error) {
       // One unavailable instrument must not stop the full scan.
+      diagnostics.push({ symbol, stage: "api", error: error instanceof Error ? error.message : "خطأ غير معروف" });
     }
   }
-  return candidates;
+  return { candidates, diagnostics };
 }
