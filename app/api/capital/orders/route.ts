@@ -15,6 +15,8 @@ const orderSchema = z.object({
   size: z.number().positive().max(100_000), entry: z.number().positive(), stop: z.number().positive(), target: z.number().positive(),
   score: z.number().min(0).max(100), confirmation: z.string().optional(),
 });
+type MarketDetails = { instrument?: { marginFactor?: number; marginFactorUnit?: string }; dealingRules?: { minDealSize?: { value?: number }; maxDealSize?: { value?: number }; minSizeIncrement?: { value?: number } }; snapshot?: { marketStatus?: string } };
+type AccountsResponse = { accounts?: Array<{ balance?: { balance?: number; profitLoss?: number; available?: number } }> };
 
 export function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
@@ -25,13 +27,32 @@ export async function POST(request: Request) {
     const riskPerUnit = Math.abs(input.entry - input.stop);
     const riskAmount = riskPerUnit * input.size;
     const rewardAmount = Math.abs(input.target - input.entry) * input.size;
-    const preview = { ...input, riskPerUnit, riskAmount, rewardAmount, riskReward: riskAmount ? rewardAmount / riskAmount : 0, mode: capitalMode() };
+    const [market, accounts] = await Promise.all([
+      capitalRequest<MarketDetails>(`/markets/${encodeURIComponent(input.epic)}`),
+      capitalRequest<AccountsResponse>("/accounts"),
+    ]);
+    const equity = accounts.accounts?.[0]?.balance?.balance ?? 0;
+    const available = accounts.accounts?.[0]?.balance?.available ?? 0;
+    const exposure = input.entry * input.size;
+    const marginFactor = market.instrument?.marginFactor ?? 0;
+    const estimatedMargin = market.instrument?.marginFactorUnit === "PERCENTAGE" ? exposure * marginFactor / 100 : exposure / Math.max(1, marginFactor);
+    const minSize = market.dealingRules?.minDealSize?.value ?? 0;
+    const maxSize = market.dealingRules?.maxDealSize?.value ?? Number.MAX_SAFE_INTEGER;
+    const riskPct = equity ? riskAmount / equity * 100 : 0;
+    const warnings = [
+      ...(input.size < minSize ? [`الحد الأدنى للحجم ${minSize}`] : []),
+      ...(input.size > maxSize ? [`الحد الأقصى للحجم ${maxSize}`] : []),
+      ...(riskPct > 1 ? ["المخاطرة تتجاوز 1% من الحساب"] : []),
+      ...(estimatedMargin > available ? ["الهامش المطلوب يتجاوز المتاح"] : []),
+      ...(market.snapshot?.marketStatus !== "TRADEABLE" ? ["السوق غير متاح للتداول الآن"] : []),
+    ];
+    const preview = { ...input, riskPerUnit, riskAmount, rewardAmount, riskReward: riskAmount ? rewardAmount / riskAmount : 0, mode: capitalMode(), exposure, equity, available, riskPct, marginFactor, estimatedMargin, availableAfterMargin: available - estimatedMargin, minSize, maxSize, sizeIncrement: market.dealingRules?.minSizeIncrement?.value ?? 0.01, marketStatus: market.snapshot?.marketStatus ?? "UNKNOWN", warnings };
     if (input.action === "preview") return NextResponse.json({ status: "preview", preview }, { headers: cors });
     if (process.env.CAPITAL_TRADING_ENABLED !== "true") {
       return NextResponse.json({ error: "التنفيذ الحقيقي مقفل. فعّل CAPITAL_TRADING_ENABLED بعد اختبار الحساب التجريبي.", preview }, { status: 403, headers: cors });
     }
-    if (input.confirmation !== "EXECUTE" || input.score < 90 || preview.riskReward < 1.8) {
-      return NextResponse.json({ error: "رفض محرك المخاطر الأمر: يلزم تأكيد صريح ونتيجة 90+ وعائد/مخاطرة 1.8+.", preview }, { status: 422, headers: cors });
+    if (input.confirmation !== "EXECUTE" || input.score < 90 || preview.riskReward < 1.8 || warnings.length) {
+      return NextResponse.json({ error: `رفض محرك المخاطر الأمر${warnings.length ? `: ${warnings.join("، ")}` : ": يلزم تأكيد صريح ونتيجة 90+ وعائد/مخاطرة 1.8+"}.`, preview }, { status: 422, headers: cors });
     }
     const body = input.type === "MARKET"
       ? { epic: input.epic, direction: input.direction, size: input.size, guaranteedStop: false, stopLevel: input.stop, profitLevel: input.target }
