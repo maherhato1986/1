@@ -18,8 +18,10 @@
     <aside class="mh-panel" dir="rtl" aria-hidden="true">
       <header><div><small>MAHER HERO</small><h1>Capital Scanner</h1></div><div class="mh-head-actions"><button class="mh-refresh" title="تحديث">↻</button><button class="mh-close" title="إغلاق">×</button></div></header>
       <section class="mh-account"><article><span>قيمة الحساب</span><strong class="mh-equity">—</strong></article><article><span>الرصيد</span><strong class="mh-balance">—</strong></article><article><span>المتاح</span><strong class="mh-available">—</strong></article><article><span>الربح/الخسارة</span><strong class="mh-pnl">—</strong></article><article><span>الوضع والفحص</span><strong><i class="mh-mode">—</i> · <i class="mh-scanned">—</i></strong></article><article><span>آخر تحديث</span><strong class="mh-time">—</strong></article></section>
-      <div class="mh-message">افتح اللوحة لبدء الفحص.</div>
-      <div class="mh-table-wrap"><table><thead><tr><th>#</th><th>السهم</th><th>التقييم</th><th>السعر</th><th>الدخول</th><th>الوقف</th><th>هدف 1</th><th>الحالة</th><th></th></tr></thead><tbody></tbody></table></div>
+      <nav class="mh-tabs"><button class="active" data-view="opportunities">الفرص</button><button data-view="positions">صفقاتي</button><button data-view="paper">ورقي</button></nav>
+      <section class="mh-view mh-opportunities-view"><div class="mh-filters"><button class="active" data-filter="all">الكل</button><button data-filter="ready">جاهزة</button><button data-filter="near">قريبة</button><button data-filter="watch">مراقبة</button></div><div class="mh-message">افتح اللوحة لبدء الفحص.</div><div class="mh-table-wrap"><table><thead><tr><th>#</th><th>السهم</th><th>التقييم</th><th>السعر</th><th>الدخول</th><th>الوقف</th><th>هدف 1</th><th>الحالة</th><th></th></tr></thead><tbody></tbody></table></div></section>
+      <section class="mh-view mh-positions-view" hidden><div class="mh-cards mh-position-cards"></div></section>
+      <section class="mh-view mh-paper-view" hidden><div class="mh-paper-head"><b>تداول ورقي بدون أموال حقيقية</b><button class="mh-clear-paper">مسح السجل</button></div><div class="mh-cards mh-paper-cards"></div></section>
       <footer><span class="mh-countdown">تحديث كل 60 ثانية</span><button class="mh-settings">الإعدادات</button></footer>
     </aside>
     <div class="mh-dialog-backdrop" hidden><section class="mh-dialog" dir="rtl"><button class="mh-dialog-close">×</button><div class="mh-dialog-body"></div></section></div>`;
@@ -27,7 +29,7 @@
 
   const $ = (selector) => root.querySelector(selector);
   const panel = $(".mh-panel"), tbody = $("tbody"), message = $(".mh-message");
-  let timer = null, countdownTimer = null, nextRefresh = 0, latest = [], latestAccount = null;
+  let timer = null, countdownTimer = null, nextRefresh = 0, latest = [], latestAccount = null, latestPortfolio = { positions: [], workingOrders: [] }, activeFilter = "all";
   const number = (value, digits = 2) => Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   const status = { ready: "جاهز", near: "قريب", watch: "مراقبة" };
 
@@ -42,11 +44,17 @@
     setLoading("جارٍ فحص الأسهم وتحليل أفضل الفرص...");
     try {
       const config = await settings();
-      const response = await fetch(`${config.apiBase.replace(/\/$/, "")}/api/capital/scanner`, { cache: "no-store", headers: { Authorization: `Bearer ${config.botToken}` } });
+      const headers = { Authorization: `Bearer ${config.botToken}` };
+      const [response, portfolioResponse] = await Promise.all([
+        fetch(`${config.apiBase.replace(/\/$/, "")}/api/capital/scanner`, { cache: "no-store", headers }),
+        fetch(`${config.apiBase.replace(/\/$/, "")}/api/capital/portfolio`, { cache: "no-store", headers }),
+      ]);
       const data = await response.json();
+      const portfolio = await portfolioResponse.json().catch(() => ({ positions: [], workingOrders: [] }));
       if (!response.ok || data.error) throw new Error(data.error || `تعذر الاتصال (${response.status})`);
       latest = data.opportunities || [];
       latestAccount = data.account || null;
+      latestPortfolio = portfolioResponse.ok ? portfolio : { positions: [], workingOrders: [] };
       const account = latestAccount?.balance || {};
       const currency = latestAccount?.currency || "$";
       const money = (value) => value === undefined || value === null ? "—" : `${number(value)} ${currency}`;
@@ -62,6 +70,8 @@
       $(".mh-scanned").textContent = `${data.analyzed || 0}/${data.scanned || 0}`;
       $(".mh-time").textContent = new Date(data.timestamp).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" });
       render();
+      renderPositions();
+      renderPaper();
       message.hidden = latest.length > 0;
       if (!latest.length) setError("لم يكتمل تحليل أي سهم. راجع رموز Capital وإعدادات API.");
       nextRefresh = Date.now() + 60_000;
@@ -69,7 +79,8 @@
   }
 
   function render() {
-    tbody.innerHTML = latest.map((item, index) => `
+    const shown = activeFilter === "all" ? latest : latest.filter((item) => item.actionStatus === activeFilter);
+    tbody.innerHTML = shown.map((item, index) => `
       <tr class="${item.actionStatus}">
         <td>${index + 1}</td><td><b>${item.symbol}</b><small>${item.breakout === "early" ? "اختراق مبكر" : item.breakout === "retest" ? "إعادة اختبار" : "مراقبة"}</small></td>
         <td><strong class="mh-score">${item.score}</strong><small>RVOL ${number(item.volumeRatio)}</small></td>
@@ -77,7 +88,21 @@
         <td><span class="mh-status">${status[item.actionStatus] || "مراقبة"}</span></td>
         <td><button class="mh-prepare" data-index="${index}">تجهيز</button></td>
       </tr>`).join("");
-    root.querySelectorAll(".mh-prepare").forEach((button) => button.addEventListener("click", () => openTrade(latest[Number(button.dataset.index)])));
+    root.querySelectorAll(".mh-prepare").forEach((button) => button.addEventListener("click", () => openTrade(shown[Number(button.dataset.index)])));
+  }
+
+  function renderPositions() {
+    const positions = latestPortfolio.positions || [], orders = latestPortfolio.workingOrders || [];
+    const cards = [
+      ...positions.map(({ position = {}, market = {} }) => `<article><div><b>${market.epic || market.symbol || "—"}</b><small>صفقة مفتوحة · ${position.direction === "SELL" ? "بيع" : "شراء"}</small></div><span>الحجم<b>${number(position.size)}</b></span><span>الدخول<b>${number(position.level)}</b></span><span>الحالي<b>${number(position.direction === "SELL" ? market.offer : market.bid)}</b></span><span>الربح/الخسارة<b class="${Number(position.upl) >= 0 ? "positive" : "negative"}">${number(position.upl)} ${position.currency || "USD"}</b></span></article>`),
+      ...orders.map(({ workingOrderData = {}, marketData = {} }) => `<article><div><b>${workingOrderData.epic || marketData.symbol || "—"}</b><small>أمر معلق · ${workingOrderData.orderType || "—"}</small></div><span>الحجم<b>${number(workingOrderData.orderSize)}</b></span><span>سعر الأمر<b>${number(workingOrderData.orderLevel)}</b></span><span>السوق<b>${marketData.marketStatus || "—"}</b></span><span>الاتجاه<b>${workingOrderData.direction || "—"}</b></span></article>`),
+    ];
+    $(".mh-position-cards").innerHTML = cards.length ? cards.join("") : '<p class="mh-empty">لا توجد صفقات أو أوامر مفتوحة.</p>';
+  }
+
+  async function renderPaper() {
+    const { paperTrades = [] } = await chrome.storage.local.get({ paperTrades: [] });
+    $(".mh-paper-cards").innerHTML = paperTrades.length ? paperTrades.slice().reverse().map((trade) => `<article><div><b>${trade.symbol}</b><small>${new Date(trade.createdAt).toLocaleString("ar-SA")}</small></div><span>الحجم<b>${number(trade.size)}</b></span><span>الدخول<b>${number(trade.entry)}</b></span><span>الوقف<b>${number(trade.stop)}</b></span><span>الهدف<b>${number(trade.target)}</b></span></article>`).join("") : '<p class="mh-empty">لم تُسجل صفقات ورقية بعد.</p>';
   }
 
   async function openTrade(item) {
@@ -90,7 +115,7 @@
     body.innerHTML = `<span class="mh-kicker">تجهيز صفقة مشروطة</span><h2>${item.symbol} <em>${item.score}/100</em></h2>
       <div class="mh-plan"><label>نوع الأمر<select class="mh-order-type"><option value="STOP">اختراق أعلى السعر</option><option value="LIMIT">إعادة اختبار</option><option value="MARKET">سعر السوق</option></select></label><label>الحجم المحسوب<input class="mh-size" type="number" min="0.01" step="0.01" value="${recommendedSize || config.orderSize}"></label><span>الدخول<b>${number(item.entry)}</b></span><span>الوقف<b>${number(item.stop)}</b></span><span>الهدف<b>${number(item.target1)}</b></span><span>المخاطرة/وحدة<b>${number(riskPerUnit)} $</b></span></div>
       <div class="mh-risk-summary"><span>قيمة الصفقة الكاملة<b class="mh-exposure">—</b></span><span>أقصى خسارة عند الوقف<b class="mh-max-loss">—</b></span><span>نسبة المخاطرة من الحساب<b class="mh-risk-pct">—</b></span><span>المتاح حالياً<b>${available == null ? "—" : `${number(available)} $`}</b></span></div><div class="mh-risk-alert"></div>
-      <p class="mh-warning">لن يُرسل أي أمر قبل معاينته. التنفيذ يحتاج تفعيلًا منفصلًا على الخادم.</p><div class="mh-dialog-actions"><button class="mh-preview">معاينة الأمر</button>${config.showExecution ? '<button class="mh-execute">تنفيذ مؤكد</button>' : ""}</div><div class="mh-result"></div>`;
+      <p class="mh-warning">لن يُرسل أي أمر قبل معاينته. التنفيذ يحتاج تفعيلًا منفصلًا على الخادم.</p><div class="mh-dialog-actions"><button class="mh-preview">معاينة الأمر</button><button class="mh-paper">تسجيل ورقي</button>${config.showExecution ? '<button class="mh-execute">تنفيذ مؤكد</button>' : ""}</div><div class="mh-result"></div>`;
     dialog.hidden = false;
     const updateRisk = () => {
       const size = Math.max(0, Number(body.querySelector(".mh-size").value) || 0);
@@ -112,10 +137,11 @@
         const response = await fetch(`${config.apiBase.replace(/\/$/, "")}/api/capital/orders`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.botToken}` }, body: JSON.stringify({ action, epic: item.epic, symbol: item.symbol, direction: "BUY", type, size, entry: item.entry, stop: item.stop, target: item.target1, score: item.score, confirmation: action === "execute" ? "EXECUTE" : undefined }) });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || "رفض الأمر");
-        result.innerHTML = action === "preview" ? `المخاطرة القصوى: <b>${number(data.preview.riskAmount)} $</b> · العائد المتوقع: <b>${number(data.preview.rewardAmount)} $</b>` : `تم إرسال الأمر. المرجع: <b>${data.dealReference}</b>`;
+        result.innerHTML = action === "preview" ? `الهامش المقدر: <b>${number(data.preview.estimatedMargin)} $</b> · المتاح بعده: <b>${number(data.preview.availableAfterMargin)} $</b> · الحد الأدنى: <b>${number(data.preview.minSize)}</b>${data.preview.warnings?.length ? `<br><strong class="negative">${data.preview.warnings.join(" · ")}</strong>` : ""}` : `تم إرسال الأمر. المرجع: <b>${data.dealReference}</b>`;
       } catch (error) { result.textContent = error.message || "تعذر تجهيز الأمر."; result.className = "mh-result error"; }
     };
     body.querySelector(".mh-preview").addEventListener("click", () => submit("preview"));
+    body.querySelector(".mh-paper").addEventListener("click", async () => { const { paperTrades = [] } = await chrome.storage.local.get({ paperTrades: [] }); const size = Number(body.querySelector(".mh-size").value); paperTrades.push({ symbol: item.symbol, epic: item.epic, size, entry: item.entry, stop: item.stop, target: item.target1, score: item.score, createdAt: new Date().toISOString(), status: "open" }); await chrome.storage.local.set({ paperTrades: paperTrades.slice(-100) }); await renderPaper(); body.querySelector(".mh-result").textContent = "تم تسجيل الصفقة ورقياً بدون إرسالها إلى Capital."; });
     body.querySelector(".mh-execute")?.addEventListener("click", () => { if (confirm(`تأكيد إرسال أمر ${item.symbol} إلى Capital؟`)) submit("execute"); });
   }
 
@@ -127,5 +153,8 @@
   function close() { panel.classList.remove("open"); panel.setAttribute("aria-hidden", "true"); clearInterval(timer); clearInterval(countdownTimer); }
   $(".mh-fab").addEventListener("click", open); $(".mh-close").addEventListener("click", close); $(".mh-refresh").addEventListener("click", refresh);
   $(".mh-settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+  root.querySelectorAll(".mh-tabs button").forEach((button) => button.addEventListener("click", () => { root.querySelectorAll(".mh-tabs button").forEach((x) => x.classList.toggle("active", x === button)); root.querySelectorAll(".mh-view").forEach((view) => { view.hidden = !view.classList.contains(`mh-${button.dataset.view}-view`); }); }));
+  root.querySelectorAll(".mh-filters button").forEach((button) => button.addEventListener("click", () => { activeFilter = button.dataset.filter; root.querySelectorAll(".mh-filters button").forEach((x) => x.classList.toggle("active", x === button)); render(); }));
+  $(".mh-clear-paper").addEventListener("click", async () => { if (confirm("مسح سجل التداول الورقي؟")) { await chrome.storage.local.set({ paperTrades: [] }); renderPaper(); } });
   $(".mh-dialog-close").addEventListener("click", () => { $(".mh-dialog-backdrop").hidden = true; });
 })();
