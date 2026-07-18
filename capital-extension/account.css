@@ -1,0 +1,28 @@
+.mh-account {
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  padding-block: 12px;
+}
+.mh-account i { font-style: normal; }
+.mh-pnl.positive { color: #147548; }
+.mh-pnl.negative { color: #b23a32; }
+.mh-risk-summary {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+}
+.mh-risk-summary span {
+  background: #edf4f0;
+  border: 1px solid #cbded4;
+  border-radius: 9px;
+  padding: 9px;
+  font-size: 11px;
+}
+.mh-risk-summary b { display: block; font-size: 14px; margin-top: 3px; }
+.mh-risk-alert { margin-top: 9px; padding: 9px; border-radius: 8px; font-size: 12px; font-weight: 700; }
+.mh-risk-alert.safe { background: #e4f5eb; color: #14613c; }
+.mh-risk-alert.caution { background: #fff2d5; color: #765313; }
+.mh-risk-alert.danger { background: #fee9e6; color: #9f2d27; }
+@media (max-width: 900px) { .mh-account { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 560px) { .mh-account, .mh-risk-summary { grid-template-columns: 1fr 1fr; } }
