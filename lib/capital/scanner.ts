@@ -133,14 +133,14 @@ function snapshot(symbol: string, name: string, epic: string, status: string, sp
 export async function scanCapitalSymbols(symbols: string[]) {
   const candidates: CapitalCandidate[] = [];
   const diagnostics: Array<{ symbol: string; stage: string; error: string }> = [];
-  for (const symbol of symbols) {
+  const scanOne = async (symbol: string) => {
     try {
       const market = await resolveEpic(symbol);
-      if (!market) { diagnostics.push({ symbol, stage: "resolve", error: "لم يُعثر على رمز مطابق في Capital" }); continue; }
-      await wait(115);
-      const daily = await capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=DAY&max=420`);
-      await wait(115);
-      const five = await capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=MINUTE_5&max=1000`);
+      if (!market) { diagnostics.push({ symbol, stage: "resolve", error: "لم يُعثر على رمز مطابق في Capital" }); return; }
+      const [daily, five] = await Promise.all([
+        capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=DAY&max=420`),
+        capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=MINUTE_5&max=1000`),
+      ]);
       const built = snapshot(symbol, market.name, market.epic, market.status, market.spreadPct, bars(five), bars(daily));
       if (built) candidates.push(built);
       else diagnostics.push({ symbol, stage: "bars", error: `بيانات غير كافية: يومي ${daily.prices?.length ?? 0}، 5 دقائق ${five.prices?.length ?? 0}` });
@@ -148,6 +148,11 @@ export async function scanCapitalSymbols(symbols: string[]) {
       // One unavailable instrument must not stop the full scan.
       diagnostics.push({ symbol, stage: "api", error: error instanceof Error ? error.message : "خطأ غير معروف" });
     }
+  };
+  // Four symbols = eight price calls per batch, below Capital's 10 requests/second limit.
+  for (let index = 0; index < symbols.length; index += 4) {
+    await Promise.all(symbols.slice(index, index + 4).map(scanOne));
+    if (index + 4 < symbols.length) await wait(1100);
   }
   return { candidates, diagnostics };
 }
