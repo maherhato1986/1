@@ -10,10 +10,21 @@ type ProfitRow = {
   note?: string;
 };
 
+type DailyReport = {
+  date: string;
+  market: "US" | "SA";
+  status: "reconciled" | "review";
+  added: number;
+  currency: "USD" | "SAR";
+  trades: string;
+  note: string;
+};
+
 const EXCHANGE_RATE = 3.7409;
-const UPDATED_THROUGH = "15 يوليو 2026";
+const UPDATED_THROUGH = "17 يوليو 2026";
 
 const usRows: ProfitRow[] = [
+  { symbol: "DXST", name: "Decent Holding", market: "US", currency: "USD", net: 140.8, note: "دورة 710 أسهم - تقرير 17 يوليو" },
   { symbol: "JLHL", market: "US", currency: "USD", net: 164.93 },
   { symbol: "GMM", market: "US", currency: "USD", net: 152.43 },
   { symbol: "TDTH", market: "US", currency: "USD", net: 24.42 },
@@ -21,8 +32,10 @@ const usRows: ProfitRow[] = [
   { symbol: "WRAP", market: "US", currency: "USD", net: 13.8 },
   { symbol: "QTTB", market: "US", currency: "USD", net: 12.01 },
   { symbol: "JZXN", market: "US", currency: "USD", net: 10.29 },
+  { symbol: "NXTC", name: "NextCure", market: "US", currency: "USD", net: 8.17, note: "63 سهمًا - مطابقة صافي الشراء والبيع" },
   { symbol: "HAO", market: "US", currency: "USD", net: 2.68 },
   { symbol: "ETOR", market: "US", currency: "USD", net: 1.93 },
+  { symbol: "PYPL", name: "PayPal", market: "US", currency: "USD", net: 1.7, note: "7 أسهم - مطابقة صافي الشراء والبيع" },
   { symbol: "FUBO", market: "US", currency: "USD", net: 0.91 },
   { symbol: "BKR", market: "US", currency: "USD", net: 0.73 },
   { symbol: "HPE", market: "US", currency: "USD", net: -0.09 },
@@ -33,6 +46,12 @@ const usRows: ProfitRow[] = [
   { symbol: "IBKR", market: "US", currency: "USD", net: -3.48 },
   { symbol: "LVS", market: "US", currency: "USD", net: -7.07 },
   { symbol: "OXY", market: "US", currency: "USD", net: -9.62 },
+];
+
+const dailyReports: DailyReport[] = [
+  { date: "17 يوليو 2026", market: "US", status: "review", added: 150.67, currency: "USD", trades: "DXST · NXTC · PYPL", note: "تمت إضافة الصفقات المطابقة فقط. بيع TNDM بانتظار كشف تكلفة الشراء." },
+  { date: "16 يوليو 2026", market: "US", status: "reconciled", added: 0, currency: "USD", trades: "تقرير مرجعي", note: "استُخدم لمطابقة تكاليف PYPL وNXTC، دون تكرار النتائج السابقة." },
+  { date: "16 يوليو 2026", market: "SA", status: "reconciled", added: 0, currency: "SAR", trades: "ثمار 4160", note: "النتيجة مدرجة مسبقًا ضمن السجل السعودي؛ لم تُحتسب مرتين." },
 ];
 
 const saRows: ProfitRow[] = [
@@ -50,10 +69,12 @@ const saRows: ProfitRow[] = [
   { symbol: "4110", name: "باتك", market: "SA", currency: "SAR", net: -0.23 },
 ];
 
-const usNet = 372.65;
+const previousUsNet = 372.65;
+const newVerifiedUsNet = 150.67;
+const usNet = previousUsNet + newVerifiedUsNet;
 const saNet = 74.05;
-const combinedSar = 1468.1;
-const combinedUsd = 392.45;
+const combinedSar = usNet * EXCHANGE_RATE + saNet;
+const combinedUsd = usNet + saNet / EXCHANGE_RATE;
 
 function formatMoney(value: number, currency: "USD" | "SAR") {
   return new Intl.NumberFormat("en-US", {
@@ -65,6 +86,7 @@ function formatMoney(value: number, currency: "USD" | "SAR") {
 function ProfitTable({ title, rows }: { title: string; rows: ProfitRow[] }) {
   const winners = rows.filter((row) => row.net > 0).length;
   const losers = rows.filter((row) => row.net < 0).length;
+  const orderedRows = [...rows].sort((a, b) => b.net - a.net);
 
   return (
     <section className="profits-panel">
@@ -93,7 +115,7 @@ function ProfitTable({ title, rows }: { title: string; rows: ProfitRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, index) => (
+            {orderedRows.map((row, index) => (
               <tr key={`${row.market}-${row.symbol}`}>
                 <td>{index + 1}</td>
                 <td><strong>{row.symbol}</strong></td>
@@ -117,6 +139,20 @@ function ProfitTable({ title, rows }: { title: string; rows: ProfitRow[] }) {
   );
 }
 
+function ReportsTimeline() {
+  return <section className="reports-panel">
+    <div className="profits-section-head">
+      <div><span className="profits-eyebrow">سجل المراجعة</span><h2>التقارير الجديدة</h2></div>
+      <span className="report-source-badge">3 كشوف تمت مراجعتها</span>
+    </div>
+    <div className="reports-grid">{dailyReports.map((report) => <article key={`${report.date}-${report.market}`}>
+      <div className="report-top"><span className={`market-mark ${report.market.toLowerCase()}`}>{report.market === "US" ? "السوق الأمريكي" : "السوق السعودي"}</span><span className={`report-state ${report.status}`}>{report.status === "review" ? "إضافة جديدة" : "تمت المطابقة"}</span></div>
+      <time>{report.date}</time><strong>{report.added ? `+${formatMoney(report.added, report.currency)}` : "دون إضافة مكررة"}</strong>
+      <p>{report.trades}</p><small>{report.note}</small>
+    </article>)}</div>
+  </section>
+}
+
 export default function RealizedProfitsPage() {
   return (
     <main className="profits-page">
@@ -127,9 +163,9 @@ export default function RealizedProfitsPage() {
 
       <header className="profits-hero">
         <div>
-          <span className="profits-badge">سجل رسمي — حتى {UPDATED_THROUGH}</span>
-          <h1>الأرباح المحققة</h1>
-          <p>النتائج الفعلية للصفقات التي تم إغلاقها وبيعها، بعد احتساب الرسوم والعمولات، دون إدخال أرباح أو خسائر المراكز المفتوحة.</p>
+          <span className="profits-badge">محدّث ومراجع حتى {UPDATED_THROUGH}</span>
+          <h1>مركز الأداء والأرباح</h1>
+          <p>صورة واضحة للأرباح المحققة، جودة النتائج، وآخر التقارير التي تمت مطابقتها بعد الرسوم، دون خلطها بالمراكز المفتوحة.</p>
         </div>
         <div className="profits-total-card">
           <span>الإجمالي الموحد التقريبي</span>
@@ -155,18 +191,26 @@ export default function RealizedProfitsPage() {
           <small>ريال لكل دولار</small>
         </article>
         <article>
-          <span>طريقة الحساب</span>
-          <strong>صافي بعد الرسوم</strong>
-          <small>الصفقات المغلقة فقط</small>
+          <span>الإضافة الجديدة المؤكدة</span>
+          <strong className="profit-positive">+{formatMoney(newVerifiedUsNet, "USD")}</strong>
+          <small>3 دورات مكتملة من تقرير 17 يوليو</small>
         </article>
       </section>
+
+      <section className="performance-strip">
+        <div><span>الرصيد الأمريكي السابق</span><strong>{formatMoney(previousUsNet, "USD")}</strong></div>
+        <i>+</i><div><span>التقارير الجديدة</span><strong>{formatMoney(newVerifiedUsNet, "USD")}</strong></div>
+        <i>=</i><div className="performance-result"><span>الإجمالي الأمريكي الحالي</span><strong>{formatMoney(usNet, "USD")}</strong></div>
+      </section>
+
+      <ReportsTimeline />
 
       <ProfitTable title="السوق الأمريكي" rows={usRows} />
       <ProfitTable title="السوق السعودي" rows={saRows} />
 
       <section className="profits-note">
         <strong>ملاحظة محاسبية</strong>
-        <p>هذه الصفحة تعرض الأرقام المعتمدة من كشوف العمليات حتى {UPDATED_THROUGH}. الصفقات الجزئية مثل AMWL وثمار محسوبة على الكمية المباعة فقط. لا تُستبدل هذه الأرقام إلا بعد إضافة كشف أحدث ومراجعته.</p>
+        <p>هذه الصفحة تعرض الأرقام المطابقة من كشوف العمليات حتى {UPDATED_THROUGH}. الصفقات الجزئية مثل AMWL وثمار محسوبة على الكمية المباعة فقط. بيع TNDM بتاريخ 17 يوليو غير مضاف للربح إلى أن يتوفر كشف تكلفة الشراء، منعًا لإظهار نتيجة تقديرية كأنها مؤكدة.</p>
       </section>
 
       <footer className="profits-footer">ماهر هيرو — سجل الأرباح المحققة بعد الرسوم</footer>
