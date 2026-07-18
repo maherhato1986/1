@@ -22,6 +22,8 @@ type DailyReport = {
 
 const EXCHANGE_RATE = 3.7409;
 const UPDATED_THROUGH = "17 يوليو 2026";
+const START_DATE = "6 يوليو 2026";
+const INITIAL_US_CAPITAL_SAR = 7000;
 
 const usRows: ProfitRow[] = [
   { symbol: "DXST", name: "Decent Holding", market: "US", currency: "USD", net: 140.8, note: "دورة 710 أسهم - تقرير 17 يوليو" },
@@ -75,6 +77,11 @@ const usNet = previousUsNet + newVerifiedUsNet;
 const saNet = 74.05;
 const combinedSar = usNet * EXCHANGE_RATE + saNet;
 const combinedUsd = usNet + saNet / EXCHANGE_RATE;
+const usProfitSar = usNet * EXCHANGE_RATE;
+const currentUsCapitalSar = INITIAL_US_CAPITAL_SAR + usProfitSar;
+const capitalReturnPct = usProfitSar / INITIAL_US_CAPITAL_SAR * 100;
+const capitalMultiple = currentUsCapitalSar / INITIAL_US_CAPITAL_SAR;
+const remainingToDoubleSar = INITIAL_US_CAPITAL_SAR * 2 - currentUsCapitalSar;
 
 function formatMoney(value: number, currency: "USD" | "SAR") {
   return new Intl.NumberFormat("en-US", {
@@ -201,6 +208,13 @@ export default function RealizedProfitsPage() {
         <div><span>الرصيد الأمريكي السابق</span><strong>{formatMoney(previousUsNet, "USD")}</strong></div>
         <i>+</i><div><span>التقارير الجديدة</span><strong>{formatMoney(newVerifiedUsNet, "USD")}</strong></div>
         <i>=</i><div className="performance-result"><span>الإجمالي الأمريكي الحالي</span><strong>{formatMoney(usNet, "USD")}</strong></div>
+      </section>
+
+      <section className="capital-growth">
+        <div className="capital-growth-head"><div><span className="profits-eyebrow">منذ بداية التداول في {START_DATE}</span><h2>نمو رأس المال الأمريكي</h2></div><span className="growth-badge">+{capitalReturnPct.toFixed(2)}%</span></div>
+        <div className="capital-equation"><article><span>رأس المال المودع</span><strong>{formatMoney(INITIAL_US_CAPITAL_SAR, "SAR")}</strong><small>3 إيداعات مؤكدة</small></article><i>+</i><article><span>الأرباح الأمريكية المحققة</span><strong className="profit-positive">{formatMoney(usProfitSar, "SAR")}</strong><small>{formatMoney(usNet, "USD")}</small></article><i>=</i><article className="current-capital"><span>رأس المال النظري الحالي</span><strong>{formatMoney(currentUsCapitalSar, "SAR")}</strong><small>{formatMoney(currentUsCapitalSar / EXCHANGE_RATE, "USD")}</small></article></div>
+        <div className="double-progress"><div><span>التقدم نحو مضاعفة رأس المال إلى 14,000 ر.س</span><strong>{capitalReturnPct.toFixed(2)}%</strong></div><b><i style={{width:`${Math.min(100,capitalReturnPct)}%`}} /></b><small>المتبقي لتحقيق الضعف: {formatMoney(remainingToDoubleSar, "SAR")} · مضاعف رأس المال الحالي: {capitalMultiple.toFixed(2)}×</small></div>
+        <div className="deposits-row"><span>6 يوليو: 1,500 ر.س</span><span>7 يوليو: 4,500 ر.س</span><span>13 يوليو: 1,000 ر.س</span></div>
       </section>
 
       <ReportsTimeline />
