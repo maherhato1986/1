@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { capitalConfigured, capitalMode, capitalRequest } from "@/lib/capital/client";
-import { scanCapitalSymbols } from "@/lib/capital/scanner";
+import { discoverCapitalUniverse, scanCapitalSymbols } from "@/lib/capital/scanner";
 import { scoreMaherHero } from "@/lib/maherHero";
 import { MAHER_HERO_WATCHLIST } from "@/lib/maherHeroWatchlist";
 import { authorized } from "@/lib/capital/auth";
@@ -12,7 +12,7 @@ export const maxDuration = 60;
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" };
 type AccountsResponse = { accounts?: Array<{ accountId: string; accountName?: string; balance?: { balance?: number; deposit?: number; profitLoss?: number; available?: number } }> };
 
-function universe() {
+function fallbackUniverse() {
   const configured = process.env.CAPITAL_SYMBOLS?.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean);
   return configured?.length ? configured.slice(0, 40) : [...MAHER_HERO_WATCHLIST];
 }
@@ -34,7 +34,18 @@ export async function GET(request: Request) {
     return NextResponse.json({ mode: "setup", error: "أضف إعدادات Capital API إلى Vercel.", opportunities: [] }, { headers: cors });
   }
   try {
-    const symbols = universe();
+    let source: "capital-market" | "configured-fallback" = "capital-market";
+    let marketUniverse = 0;
+    let symbols: string[];
+    try {
+      const discovered = await discoverCapitalUniverse(40);
+      symbols = discovered.symbols;
+      marketUniverse = discovered.totalShares;
+      if (!symbols.length) throw new Error("لم يعثر Capital على أسهم قابلة للفحص");
+    } catch {
+      source = "configured-fallback";
+      symbols = fallbackUniverse();
+    }
     const [scan, accounts] = await Promise.all([
       scanCapitalSymbols(symbols),
       capitalRequest<AccountsResponse>("/accounts").catch(() => ({ accounts: [] })),
@@ -52,7 +63,8 @@ export async function GET(request: Request) {
     }).sort((a, b) => b.score - a.score || b.volumeRatio - a.volumeRatio).slice(0, 10);
     const diagnostic = scan.diagnostics[0];
     return NextResponse.json({
-      mode: capitalMode(), provider: "capital.com", scanned: symbols.length, analyzed: stocks.length,
+      mode: capitalMode(), provider: "capital.com", source, marketUniverse, prefiltered: symbols.length,
+      scanned: symbols.length, analyzed: stocks.length,
       opportunities, account: accounts.accounts?.[0] ?? null, timestamp: new Date().toISOString(), refreshAfterSeconds: 60,
       error: stocks.length ? undefined : diagnostic ? `${diagnostic.symbol}: ${diagnostic.error}` : "لم تتوفر بيانات للتحليل.",
       diagnostics: scan.diagnostics.slice(0, 12),
