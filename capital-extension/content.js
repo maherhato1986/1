@@ -50,8 +50,10 @@
       const account = latestAccount?.balance || {};
       const currency = latestAccount?.currency || "$";
       const money = (value) => value === undefined || value === null ? "—" : `${number(value)} ${currency}`;
-      $(".mh-balance").textContent = money(account.balance);
-      $(".mh-equity").textContent = money((account.balance ?? 0) + (account.profitLoss ?? 0));
+      const equity = account.balance;
+      const funds = equity == null ? null : equity - (account.profitLoss ?? 0);
+      $(".mh-balance").textContent = money(funds);
+      $(".mh-equity").textContent = money(equity);
       $(".mh-available").textContent = money(account.available);
       $(".mh-pnl").textContent = money(account.profitLoss);
       $(".mh-pnl").className = `mh-pnl ${(account.profitLoss ?? 0) >= 0 ? "positive" : "negative"}`;
@@ -83,7 +85,7 @@
     const riskPerUnit = Math.max(0.0001, Math.abs(item.entry - item.stop));
     const recommendedSize = Math.max(0.01, Math.floor((config.riskDollars / riskPerUnit) * 100) / 100);
     const account = latestAccount?.balance || {};
-    const equity = Math.max(0, (account.balance ?? 0) + (account.profitLoss ?? 0));
+    const equity = Math.max(0, account.balance ?? 0);
     const available = account.available;
     body.innerHTML = `<span class="mh-kicker">تجهيز صفقة مشروطة</span><h2>${item.symbol} <em>${item.score}/100</em></h2>
       <div class="mh-plan"><label>نوع الأمر<select class="mh-order-type"><option value="STOP">اختراق أعلى السعر</option><option value="LIMIT">إعادة اختبار</option><option value="MARKET">سعر السوق</option></select></label><label>الحجم المحسوب<input class="mh-size" type="number" min="0.01" step="0.01" value="${recommendedSize || config.orderSize}"></label><span>الدخول<b>${number(item.entry)}</b></span><span>الوقف<b>${number(item.stop)}</b></span><span>الهدف<b>${number(item.target1)}</b></span><span>المخاطرة/وحدة<b>${number(riskPerUnit)} $</b></span></div>
