@@ -24,6 +24,7 @@ const EXCHANGE_RATE = 3.7409;
 const UPDATED_THROUGH = "17 يوليو 2026";
 const START_DATE = "6 يوليو 2026";
 const INITIAL_US_CAPITAL_SAR = 7000;
+const INITIAL_SA_CAPITAL_SAR = 5300;
 
 const usRows: ProfitRow[] = [
   { symbol: "DXST", name: "Decent Holding", market: "US", currency: "USD", net: 140.8, note: "دورة 710 أسهم - تقرير 17 يوليو" },
@@ -82,6 +83,12 @@ const currentUsCapitalSar = INITIAL_US_CAPITAL_SAR + usProfitSar;
 const capitalReturnPct = usProfitSar / INITIAL_US_CAPITAL_SAR * 100;
 const capitalMultiple = currentUsCapitalSar / INITIAL_US_CAPITAL_SAR;
 const remainingToDoubleSar = INITIAL_US_CAPITAL_SAR * 2 - currentUsCapitalSar;
+const currentSaCapitalSar = INITIAL_SA_CAPITAL_SAR + saNet;
+const saReturnPct = saNet / INITIAL_SA_CAPITAL_SAR * 100;
+const totalDepositedSar = INITIAL_US_CAPITAL_SAR + INITIAL_SA_CAPITAL_SAR;
+const totalCurrentCapitalSar = totalDepositedSar + combinedSar;
+const totalReturnPct = combinedSar / totalDepositedSar * 100;
+const totalCapitalMultiple = totalCurrentCapitalSar / totalDepositedSar;
 
 function formatMoney(value: number, currency: "USD" | "SAR") {
   return new Intl.NumberFormat("en-US", {
@@ -215,6 +222,8 @@ export default function RealizedProfitsPage() {
         <div className="capital-equation"><article><span>رأس المال المودع</span><strong>{formatMoney(INITIAL_US_CAPITAL_SAR, "SAR")}</strong><small>3 إيداعات مؤكدة</small></article><i>+</i><article><span>الأرباح الأمريكية المحققة</span><strong className="profit-positive">{formatMoney(usProfitSar, "SAR")}</strong><small>{formatMoney(usNet, "USD")}</small></article><i>=</i><article className="current-capital"><span>رأس المال النظري الحالي</span><strong>{formatMoney(currentUsCapitalSar, "SAR")}</strong><small>{formatMoney(currentUsCapitalSar / EXCHANGE_RATE, "USD")}</small></article></div>
         <div className="double-progress"><div><span>التقدم نحو مضاعفة رأس المال إلى 14,000 ر.س</span><strong>{capitalReturnPct.toFixed(2)}%</strong></div><b><i style={{width:`${Math.min(100,capitalReturnPct)}%`}} /></b><small>المتبقي لتحقيق الضعف: {formatMoney(remainingToDoubleSar, "SAR")} · مضاعف رأس المال الحالي: {capitalMultiple.toFixed(2)}×</small></div>
         <div className="deposits-row"><span>6 يوليو: 1,500 ر.س</span><span>7 يوليو: 4,500 ر.س</span><span>13 يوليو: 1,000 ر.س</span></div>
+        <div className="saudi-capital-card"><div><span className="market-capital-label">رأس مال السوق السعودي</span><strong>{formatMoney(INITIAL_SA_CAPITAL_SAR, "SAR")}</strong><small>3 يوليو: 500 · 6 يوليو: 2,400 + 2,400</small></div><i>+</i><div><span>الأرباح السعودية المحققة</span><strong className="profit-positive">{formatMoney(saNet, "SAR")}</strong><small>عائد {saReturnPct.toFixed(2)}%</small></div><i>=</i><div><span>الرأس المال النظري الحالي</span><strong>{formatMoney(currentSaCapitalSar, "SAR")}</strong><small>مضاعف 1.01×</small></div></div>
+        <div className="all-markets-total"><div><span>إجمالي الإيداعات في السوقين</span><strong>{formatMoney(totalDepositedSar, "SAR")}</strong></div><div><span>إجمالي الأرباح المحققة</span><strong>+{formatMoney(combinedSar, "SAR")}</strong></div><div><span>إجمالي رأس المال النظري الحالي</span><strong>{formatMoney(totalCurrentCapitalSar, "SAR")}</strong><small>نمو {totalReturnPct.toFixed(2)}% · مضاعف {totalCapitalMultiple.toFixed(2)}×</small></div></div>
       </section>
 
       <ReportsTimeline />
