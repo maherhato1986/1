@@ -7,6 +7,8 @@ type CapitalMethod = "GET" | "POST" | "PUT" | "DELETE";
 declare global {
   // eslint-disable-next-line no-var
   var capitalSession: SessionTokens | undefined;
+  // eslint-disable-next-line no-var
+  var capitalSessionPromise: Promise<SessionTokens> | undefined;
 }
 
 function config() {
@@ -44,7 +46,12 @@ async function createSession(): Promise<SessionTokens> {
 
 async function session() {
   const cached = globalThis.capitalSession;
-  return cached && cached.expiresAt > Date.now() ? cached : createSession();
+  if (cached && cached.expiresAt > Date.now()) return cached;
+  if (globalThis.capitalSessionPromise) return globalThis.capitalSessionPromise;
+  globalThis.capitalSessionPromise = createSession().finally(() => {
+    globalThis.capitalSessionPromise = undefined;
+  });
+  return globalThis.capitalSessionPromise;
 }
 
 export async function capitalRequest<T>(path: string, options?: { method?: CapitalMethod; body?: unknown; retry?: boolean }): Promise<T> {
@@ -78,4 +85,3 @@ export function capitalMode() {
 export function capitalConfigured() {
   return Boolean(process.env.CAPITAL_API_KEY && process.env.CAPITAL_IDENTIFIER && process.env.CAPITAL_API_PASSWORD);
 }
-
