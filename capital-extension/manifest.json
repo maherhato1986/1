@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Maher Hero Capital Scanner",
+  "version": "0.1.0",
+  "description": "أفضل فرص ماهر هيرو داخل منصة Capital.com",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://capital.com/*",
+    "https://*.vercel.app/*",
+    "http://localhost:3000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://capital.com/trading/platform/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "Maher Hero Capital Bot" },
+  "web_accessible_resources": [
+    { "resources": ["panel.css"], "matches": ["https://capital.com/*"] }
+  ]
+}
+

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width">
+  <title>إعدادات Maher Hero Capital</title>
+  <style>body{font-family:Tahoma,sans-serif;background:#f3f0e8;color:#18352e;margin:0}.wrap{max-width:650px;margin:50px auto;background:#fff;padding:30px;border-radius:18px;box-shadow:0 15px 50px #18352e20}h1{margin-top:0}label{display:block;margin:18px 0;font-weight:700}input{display:block;width:100%;box-sizing:border-box;margin-top:7px;padding:11px;border:1px solid #cec6b7;border-radius:8px}label.check{display:flex;gap:10px;align-items:center;background:#fff0e6;padding:14px;border-radius:9px;color:#8f332c}label.check input{width:auto;margin:0}button{border:0;border-radius:9px;background:#173f35;color:white;padding:11px 18px;font-weight:700;cursor:pointer}.note{color:#69736f;font-size:13px}.saved{color:#1a7950;margin-right:10px}</style>
+</head>
+<body><main class="wrap">
+  <h1>إعدادات Capital Scanner</h1>
+  <p class="note">لا تضع مفتاح Capital هنا. المفاتيح تحفظ على خادم Vercel فقط.</p>
+  <label>عنوان خادم ماهر هيرو<input id="apiBase" placeholder="https://your-project.vercel.app"></label>
+  <label>رمز وصول البوت<input id="botToken" type="password" autocomplete="off" placeholder="نفس CAPITAL_BOT_TOKEN في Vercel"></label>
+  <label>الحجم الافتراضي<input id="orderSize" type="number" min="0.01" step="0.01"></label>
+  <label>المخاطرة المرجعية بالدولار<input id="riskDollars" type="number" min="0.5" step="0.5"></label>
+  <label class="check"><input id="showExecution" type="checkbox">إظهار زر التنفيذ الحقيقي داخل اللوحة</label>
+  <button id="save">حفظ الإعدادات</button><span class="saved" id="saved"></span>
+  <script src="options.js"></script>
+</main></body></html>
