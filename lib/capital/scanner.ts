@@ -3,11 +3,17 @@ import { Direction, FrameSignal, StockSnapshot } from "@/lib/maherHero";
 import { capitalRequest } from "@/lib/capital/client";
 
 type MarketSearch = { markets?: Array<{ epic: string; symbol?: string; instrumentName?: string; marketStatus?: string; bid?: number; offer?: number }> };
+type MarketSummary = {
+  epic: string; symbol?: string; instrumentName?: string; instrumentType?: string;
+  marketStatus?: string; bid?: number; offer?: number; percentageChange?: number;
+  streamingPricesAvailable?: boolean;
+};
 type PriceResponse = { prices?: Array<{ snapshotTimeUTC: string; openPrice: { bid: number; ask: number }; highPrice: { bid: number; ask: number }; lowPrice: { bid: number; ask: number }; closePrice: { bid: number; ask: number }; lastTradedVolume?: number }> };
 
 export type CapitalCandidate = StockSnapshot & { epic: string; spreadPct: number; marketStatus: string };
 
 const epicCache = new Map<string, { epic: string; name: string; status: string; spreadPct: number }>();
+let discoveryCache: { expiresAt: number; symbols: string[]; totalShares: number } | null = null;
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const mid = (price: { bid: number; ask: number }) => (price.bid + price.ask) / 2;
 
@@ -55,6 +61,45 @@ async function resolveEpic(symbol: string) {
   const resolved = { epic: exact.epic, name: exact.instrumentName ?? symbol, status: exact.marketStatus ?? "UNKNOWN", spreadPct: middle ? Math.abs(exact.offer! - exact.bid!) / middle * 100 : 0 };
   epicCache.set(symbol, resolved);
   return resolved;
+}
+
+function marketSpread(item: MarketSummary) {
+  const middle = item.bid && item.offer ? (item.bid + item.offer) / 2 : 0;
+  return middle ? Math.abs(item.offer! - item.bid!) / middle * 100 : 999;
+}
+
+function discoveryScore(item: MarketSummary) {
+  const change = Number(item.percentageChange ?? 0);
+  const spread = marketSpread(item);
+  const momentum = change >= 2 && change <= 20 ? 100 + change * 2 : Math.max(0, 40 - Math.abs(change - 5) * 2);
+  const live = item.marketStatus === "TRADEABLE" ? 15 : 0;
+  const streaming = item.streamingPricesAvailable === false ? -20 : 5;
+  return momentum + live + streaming - spread * 12;
+}
+
+/** Discover the strongest share CFDs directly from Capital instead of a fixed watchlist. */
+export async function discoverCapitalUniverse(limit = 40) {
+  if (discoveryCache && discoveryCache.expiresAt > Date.now()) return discoveryCache;
+  const response = await capitalRequest<{ markets?: MarketSummary[] }>("/markets");
+  const shares = (response.markets ?? []).filter((item) => {
+    if (item.instrumentType !== "SHARES" || !item.epic) return false;
+    if (!["TRADEABLE", "CLOSED"].includes(item.marketStatus ?? "")) return false;
+    const middle = item.bid && item.offer ? (item.bid + item.offer) / 2 : 0;
+    return middle >= 0.25 && middle <= 1500 && marketSpread(item) <= 1.5;
+  });
+  const selected = shares.sort((a, b) => discoveryScore(b) - discoveryScore(a)).slice(0, limit);
+  for (const item of selected) {
+    const resolved = {
+      epic: item.epic,
+      name: item.instrumentName ?? item.symbol ?? item.epic,
+      status: item.marketStatus ?? "UNKNOWN",
+      spreadPct: marketSpread(item),
+    };
+    epicCache.set(item.epic.toUpperCase(), resolved);
+    if (item.symbol) epicCache.set(item.symbol.toUpperCase(), resolved);
+  }
+  discoveryCache = { expiresAt: Date.now() + 5 * 60_000, symbols: selected.map((item) => item.epic.toUpperCase()), totalShares: shares.length };
+  return discoveryCache;
 }
 
 function snapshot(symbol: string, name: string, epic: string, status: string, spreadPct: number, raw5: Bar[], rawDay: Bar[]): CapitalCandidate | null {
