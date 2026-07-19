@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { capitalConfigured, capitalMode, capitalRequest } from "@/lib/capital/client";
-import { discoverCapitalUniverse, scanCapitalSymbols } from "@/lib/capital/scanner";
+import { CapitalAssetClass, discoverCapitalUniverse, scanCapitalSymbols } from "@/lib/capital/scanner";
 import { scoreMaherHero } from "@/lib/maherHero";
 import { MAHER_HERO_WATCHLIST } from "@/lib/maherHeroWatchlist";
 import { authorized } from "@/lib/capital/auth";
@@ -10,7 +10,10 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" };
-type AccountsResponse = { accounts?: Array<{ accountId: string; accountName?: string; balance?: { balance?: number; deposit?: number; profitLoss?: number; available?: number } }> };
+type AccountsResponse = { accounts?: Array<{ accountId: string; accountName?: string; currency?: string; balance?: { balance?: number; deposit?: number; profitLoss?: number; available?: number } }> };
+
+const allowedAssetClasses = new Set<CapitalAssetClass>(["shares", "crypto", "forex", "indices", "commodities"]);
+const assetLabels: Record<CapitalAssetClass, string> = { shares: "الأسهم الأمريكية", crypto: "العملات الرقمية", forex: "الفوركس", indices: "المؤشرات", commodities: "السلع" };
 
 function envEnabled(value: string | undefined) {
   return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
@@ -38,20 +41,23 @@ export async function GET(request: Request) {
     return NextResponse.json({ mode: "setup", tradingEnabled: false, error: "أضف إعدادات Capital API إلى Vercel.", opportunities: [] }, { headers: cors });
   }
   try {
+    const requested = new URL(request.url).searchParams.get("market") as CapitalAssetClass | null;
+    const assetClass: CapitalAssetClass = requested && allowedAssetClasses.has(requested) ? requested : "shares";
     let source: "capital-market" | "configured-fallback" = "capital-market";
     let marketUniverse = 0;
     let symbols: string[];
     try {
-      const discovered = await discoverCapitalUniverse(40);
+      const discovered = await discoverCapitalUniverse(40, assetClass);
       symbols = discovered.symbols;
-      marketUniverse = discovered.totalShares;
-      if (!symbols.length) throw new Error("لم يعثر Capital على أسهم قابلة للفحص");
-    } catch {
+      marketUniverse = discovered.totalMarkets;
+      if (!symbols.length) throw new Error(`لم يعثر Capital على أدوات قابلة للفحص ضمن ${assetLabels[assetClass]}`);
+    } catch (error) {
+      if (assetClass !== "shares") throw error;
       source = "configured-fallback";
       symbols = fallbackUniverse();
     }
     const [scan, accounts] = await Promise.all([
-      scanCapitalSymbols(symbols),
+      scanCapitalSymbols(symbols, assetClass),
       capitalRequest<AccountsResponse>("/accounts").catch(() => ({ accounts: [] })),
     ]);
     const stocks = scan.candidates;
@@ -69,10 +75,11 @@ export async function GET(request: Request) {
     }).sort((a, b) => b.rawScore - a.rawScore || b.volumeRatio - a.volumeRatio).slice(0, 10);
     const diagnostic = scan.diagnostics[0];
     return NextResponse.json({
-      mode: capitalMode(), tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED), provider: "capital.com", source, marketUniverse, prefiltered: symbols.length,
+      mode: capitalMode(), tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED), provider: "capital.com", source,
+      assetClass, assetLabel: assetLabels[assetClass], marketUniverse, prefiltered: symbols.length,
       scanned: symbols.length, analyzed: stocks.length,
       opportunities, account: accounts.accounts?.[0] ?? null, timestamp: new Date().toISOString(), refreshAfterSeconds: 60,
-      error: stocks.length ? undefined : diagnostic ? `${diagnostic.symbol}: ${diagnostic.error}` : "لم تتوفر بيانات للتحليل.",
+      error: stocks.length ? undefined : diagnostic ? `${diagnostic.symbol}: ${diagnostic.error}` : `لم تتوفر بيانات لتحليل ${assetLabels[assetClass]}.`,
       diagnostics: scan.diagnostics.slice(0, 12),
     }, { headers: { ...cors, "Cache-Control": "no-store, no-cache, must-revalidate" } });
   } catch (error) {
