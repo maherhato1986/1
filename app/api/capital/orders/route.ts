@@ -18,6 +18,10 @@ const orderSchema = z.object({
 type MarketDetails = { instrument?: { marginFactor?: number; marginFactorUnit?: string }; dealingRules?: { minDealSize?: { value?: number }; maxDealSize?: { value?: number }; minSizeIncrement?: { value?: number } }; snapshot?: { marketStatus?: string } };
 type AccountsResponse = { accounts?: Array<{ balance?: { balance?: number; profitLoss?: number; available?: number } }> };
 
+function envEnabled(value: string | undefined) {
+  return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
 export function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
 export async function POST(request: Request) {
@@ -46,9 +50,9 @@ export async function POST(request: Request) {
       ...(estimatedMargin > available ? ["الهامش المطلوب يتجاوز المتاح"] : []),
       ...(market.snapshot?.marketStatus !== "TRADEABLE" ? ["السوق غير متاح للتداول الآن"] : []),
     ];
-    const preview = { ...input, riskPerUnit, riskAmount, rewardAmount, riskReward: riskAmount ? rewardAmount / riskAmount : 0, mode: capitalMode(), exposure, equity, available, riskPct, marginFactor, estimatedMargin, availableAfterMargin: available - estimatedMargin, minSize, maxSize, sizeIncrement: market.dealingRules?.minSizeIncrement?.value ?? 0.01, marketStatus: market.snapshot?.marketStatus ?? "UNKNOWN", warnings };
-    if (input.action === "preview") return NextResponse.json({ status: "preview", preview }, { headers: cors });
-    if (process.env.CAPITAL_TRADING_ENABLED !== "true") {
+    const preview = { ...input, tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED), riskPerUnit, riskAmount, rewardAmount, riskReward: riskAmount ? rewardAmount / riskAmount : 0, mode: capitalMode(), exposure, equity, available, riskPct, marginFactor, estimatedMargin, availableAfterMargin: available - estimatedMargin, minSize, maxSize, sizeIncrement: market.dealingRules?.minSizeIncrement?.value ?? 0.01, marketStatus: market.snapshot?.marketStatus ?? "UNKNOWN", warnings };
+    if (input.action === "preview") return NextResponse.json({ status: "preview", preview }, { headers: { ...cors, "Cache-Control": "no-store" } });
+    if (!envEnabled(process.env.CAPITAL_TRADING_ENABLED)) {
       return NextResponse.json({ error: "التنفيذ الحقيقي مقفل. فعّل CAPITAL_TRADING_ENABLED بعد اختبار الحساب التجريبي.", preview }, { status: 403, headers: cors });
     }
     if (input.confirmation !== "EXECUTE" || input.score < 90 || preview.riskReward < 1.8 || warnings.length) {
