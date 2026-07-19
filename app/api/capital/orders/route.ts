@@ -88,7 +88,7 @@ async function currencyRate(fromCurrency: string, toCurrency: string) {
   const searches = [directLabel, `${from}${to}`, inverseLabel, `${to}${from}`];
 
   for (const searchTerm of searches) {
-    const response = await capitalRequest<MarketSearch>(`/markets?searchTerm=${encodeURIComponent(searchTerm)}`).catch(() => ({ markets: [] }));
+    const response = await capitalRequest<MarketSearch>(`/markets?searchTerm=${encodeURIComponent(searchTerm)}`).catch((): MarketSearch => ({ markets: [] }));
     for (const item of response.markets ?? []) {
       const label = `${item.symbol ?? ""} ${item.instrumentName ?? ""} ${item.epic ?? ""}`.toUpperCase().replace(/[^A-Z]/g, "");
       const mid = marketMid(item);
@@ -128,7 +128,7 @@ export async function POST(request: Request) {
     const [market, accounts, preferences] = await Promise.all([
       capitalRequest<MarketDetails>(`/markets/${encodeURIComponent(input.epic)}`),
       capitalRequest<AccountsResponse>("/accounts"),
-      capitalRequest<AccountPreferences>("/accounts/preferences").catch(() => ({ leverages: {} })),
+      capitalRequest<AccountPreferences>("/accounts/preferences").catch((): AccountPreferences => ({ leverages: {} })),
     ]);
 
     const account = accounts.accounts?.find((item) => item.preferred) ?? accounts.accounts?.[0];
