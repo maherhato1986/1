@@ -2,7 +2,7 @@ import { Bar, completedBars, macdSignal, rsi, sma, trueRangeAverage } from "@/li
 import { Direction, FrameSignal, StockSnapshot } from "@/lib/maherHero";
 import { capitalRequest } from "@/lib/capital/client";
 
-type MarketSearch = { markets?: Array<{ epic: string; symbol?: string; instrumentName?: string; marketStatus?: string; bid?: number; offer?: number }> };
+type MarketSearch = { markets?: Array<{ epic: string; symbol?: string; instrumentName?: string; instrumentType?: string; marketStatus?: string; bid?: number; offer?: number }> };
 type MarketSummary = {
   epic: string; symbol?: string; instrumentName?: string; instrumentType?: string;
   marketStatus?: string; bid?: number; offer?: number; percentageChange?: number;
@@ -10,10 +10,27 @@ type MarketSummary = {
 };
 type PriceResponse = { prices?: Array<{ snapshotTimeUTC: string; openPrice: { bid: number; ask: number }; highPrice: { bid: number; ask: number }; lowPrice: { bid: number; ask: number }; closePrice: { bid: number; ask: number }; lastTradedVolume?: number }> };
 
-export type CapitalCandidate = StockSnapshot & { epic: string; spreadPct: number; marketStatus: string };
+export type CapitalAssetClass = "shares" | "crypto" | "forex" | "indices" | "commodities";
+export type CapitalCandidate = StockSnapshot & { epic: string; spreadPct: number; marketStatus: string; assetClass: CapitalAssetClass };
+
+const instrumentTypes: Record<CapitalAssetClass, string> = {
+  shares: "SHARES",
+  crypto: "CRYPTOCURRENCIES",
+  forex: "CURRENCIES",
+  indices: "INDICES",
+  commodities: "COMMODITIES",
+};
+
+const spreadLimits: Record<CapitalAssetClass, number> = {
+  shares: 1.5,
+  crypto: 3,
+  forex: 0.6,
+  indices: 1.2,
+  commodities: 1.8,
+};
 
 const epicCache = new Map<string, { epic: string; name: string; status: string; spreadPct: number }>();
-let discoveryCache: { expiresAt: number; symbols: string[]; totalShares: number } | null = null;
+const discoveryCache = new Map<CapitalAssetClass, { expiresAt: number; symbols: string[]; totalMarkets: number }>();
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const mid = (price: { bid: number; ask: number }) => (price.bid + price.ask) / 2;
 
@@ -71,23 +88,27 @@ function marketSpread(item: MarketSummary) {
 function discoveryScore(item: MarketSummary) {
   const change = Number(item.percentageChange ?? 0);
   const spread = marketSpread(item);
-  const momentum = change >= 2 && change <= 20 ? 100 + change * 2 : Math.max(0, 40 - Math.abs(change - 5) * 2);
+  const momentum = change >= 1 && change <= 20 ? 100 + change * 2 : Math.max(0, 45 - Math.abs(change - 4) * 2);
   const live = item.marketStatus === "TRADEABLE" ? 15 : 0;
   const streaming = item.streamingPricesAvailable === false ? -20 : 5;
   return momentum + live + streaming - spread * 12;
 }
 
-/** Discover the strongest share CFDs directly from Capital instead of a fixed watchlist. */
-export async function discoverCapitalUniverse(limit = 40) {
-  if (discoveryCache && discoveryCache.expiresAt > Date.now()) return discoveryCache;
+/** Discover the strongest instruments directly from Capital for the selected asset class. */
+export async function discoverCapitalUniverse(limit = 40, assetClass: CapitalAssetClass = "shares") {
+  const cached = discoveryCache.get(assetClass);
+  if (cached && cached.expiresAt > Date.now()) return cached;
   const response = await capitalRequest<{ markets?: MarketSummary[] }>("/markets");
-  const shares = (response.markets ?? []).filter((item) => {
-    if (item.instrumentType !== "SHARES" || !item.epic) return false;
+  const expectedType = instrumentTypes[assetClass];
+  const markets = (response.markets ?? []).filter((item) => {
+    if (item.instrumentType !== expectedType || !item.epic) return false;
     if (!["TRADEABLE", "CLOSED"].includes(item.marketStatus ?? "")) return false;
     const middle = item.bid && item.offer ? (item.bid + item.offer) / 2 : 0;
-    return middle >= 0.25 && middle <= 1500 && marketSpread(item) <= 1.5;
+    if (!(middle > 0) || marketSpread(item) > spreadLimits[assetClass]) return false;
+    if (assetClass === "shares" && (middle < 0.25 || middle > 1500)) return false;
+    return true;
   });
-  const selected = shares.sort((a, b) => discoveryScore(b) - discoveryScore(a)).slice(0, limit);
+  const selected = markets.sort((a, b) => discoveryScore(b) - discoveryScore(a)).slice(0, limit);
   for (const item of selected) {
     const resolved = {
       epic: item.epic,
@@ -98,11 +119,12 @@ export async function discoverCapitalUniverse(limit = 40) {
     epicCache.set(item.epic.toUpperCase(), resolved);
     if (item.symbol) epicCache.set(item.symbol.toUpperCase(), resolved);
   }
-  discoveryCache = { expiresAt: Date.now() + 5 * 60_000, symbols: selected.map((item) => item.epic.toUpperCase()), totalShares: shares.length };
-  return discoveryCache;
+  const result = { expiresAt: Date.now() + 5 * 60_000, symbols: selected.map((item) => item.epic.toUpperCase()), totalMarkets: markets.length };
+  discoveryCache.set(assetClass, result);
+  return result;
 }
 
-function snapshot(symbol: string, name: string, epic: string, status: string, spreadPct: number, raw5: Bar[], rawDay: Bar[]): CapitalCandidate | null {
+function snapshot(symbol: string, name: string, epic: string, status: string, spreadPct: number, assetClass: CapitalAssetClass, raw5: Bar[], rawDay: Bar[]): CapitalCandidate | null {
   const m5 = completedBars(raw5, 5), daily = completedBars(rawDay, 1440);
   if (m5.length < 40 || daily.length < 35) return null;
   const price = m5.at(-1)!.c, previousClose = daily.at(-2)?.c ?? daily.at(-1)!.o;
@@ -122,7 +144,7 @@ function snapshot(symbol: string, name: string, epic: string, status: string, sp
   const frames = { weekly: weekly(daily), daily: frame(daily), hourly: frame(aggregate(m5, 12)), m15: frame(aggregate(m5, 3)), m5: frame(m5) };
   const high = Math.max(...m5.slice(-78).map((x) => x.h));
   return {
-    symbol, name, epic, marketStatus: status, spreadPct, market: "US", price, changePct,
+    symbol, name, epic, marketStatus: status, spreadPct, assetClass, market: "US", price, changePct,
     sessionGainPct: changePct, pullbackFromHighPct: high ? (high - price) / high * 100 : 0,
     volumeRatio, rsi: frames.m5.rsi, macdSignal: frames.m5.macdSignal, trend: frames.m5.trend,
     breakout, resistanceDistancePct: Math.max(0, (nextResistance - price) / price * 100),
@@ -130,7 +152,7 @@ function snapshot(symbol: string, name: string, epic: string, status: string, sp
   };
 }
 
-export async function scanCapitalSymbols(symbols: string[]) {
+export async function scanCapitalSymbols(symbols: string[], assetClass: CapitalAssetClass = "shares") {
   const candidates: CapitalCandidate[] = [];
   const diagnostics: Array<{ symbol: string; stage: string; error: string }> = [];
   const scanOne = async (symbol: string) => {
@@ -141,15 +163,13 @@ export async function scanCapitalSymbols(symbols: string[]) {
         capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=DAY&max=420`),
         capitalRequest<PriceResponse>(`/prices/${encodeURIComponent(market.epic)}?resolution=MINUTE_5&max=1000`),
       ]);
-      const built = snapshot(symbol, market.name, market.epic, market.status, market.spreadPct, bars(five), bars(daily));
+      const built = snapshot(symbol, market.name, market.epic, market.status, market.spreadPct, assetClass, bars(five), bars(daily));
       if (built) candidates.push(built);
       else diagnostics.push({ symbol, stage: "bars", error: `بيانات غير كافية: يومي ${daily.prices?.length ?? 0}، 5 دقائق ${five.prices?.length ?? 0}` });
     } catch (error) {
-      // One unavailable instrument must not stop the full scan.
       diagnostics.push({ symbol, stage: "api", error: error instanceof Error ? error.message : "خطأ غير معروف" });
     }
   };
-  // Four symbols = eight price calls per batch, below Capital's 10 requests/second limit.
   for (let index = 0; index < symbols.length; index += 4) {
     await Promise.all(symbols.slice(index, index + 4).map(scanOne));
     if (index + 4 < symbols.length) await wait(1100);
