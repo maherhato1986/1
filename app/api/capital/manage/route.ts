@@ -22,9 +22,17 @@ const schema = z.object({
 });
 
 type CapitalResult = { dealReference?: string };
+type DealConfirmation = { dealStatus?: string; status?: string; reason?: string; dealId?: string; affectedDeals?: Array<{ dealId?: string; status?: string }> };
 
 function envEnabled(value: string | undefined) {
   return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function confirmationAccepted(confirmation: DealConfirmation) {
+  const dealStatus = String(confirmation.dealStatus ?? "").toUpperCase();
+  const status = String(confirmation.status ?? "").toUpperCase();
+  if (dealStatus === "REJECTED" || status === "REJECTED") return false;
+  return dealStatus === "ACCEPTED" || ["OPEN", "OPENED", "CLOSED", "DELETED", "AMENDED"].includes(status) || Boolean(confirmation.dealId);
 }
 
 export function OPTIONS() {
@@ -81,9 +89,15 @@ export async function POST(request: Request) {
       throw new Error("لم ترجع Capital رقم مرجع للعملية.");
     }
 
-    const confirmation = await capitalRequest(`/confirms/${encodeURIComponent(result.dealReference)}`);
+    const confirmation = await capitalRequest<DealConfirmation>(`/confirms/${encodeURIComponent(result.dealReference)}`);
+    if (!confirmationAccepted(confirmation)) {
+      return NextResponse.json(
+        { error: `رفضت Capital العملية: ${confirmation.reason || confirmation.dealStatus || confirmation.status || "سبب غير معروف"}`, action: input.action, dealReference: result.dealReference, confirmation },
+        { status: 422, headers: cors },
+      );
+    }
     return NextResponse.json(
-      { status: "submitted", action: input.action, dealReference: result.dealReference, confirmation },
+      { status: "accepted", action: input.action, dealReference: result.dealReference, confirmation },
       { headers: cors },
     );
   } catch (error) {
