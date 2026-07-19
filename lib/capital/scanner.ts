@@ -8,12 +8,14 @@ type MarketSummary = {
   marketStatus?: string; bid?: number; offer?: number; percentageChange?: number;
   streamingPricesAvailable?: boolean;
 };
+type MarketNode = { id: string; name?: string };
+type MarketNavigation = { nodes?: MarketNode[]; markets?: MarketSummary[] };
 type PriceResponse = { prices?: Array<{ snapshotTimeUTC: string; openPrice: { bid: number; ask: number }; highPrice: { bid: number; ask: number }; lowPrice: { bid: number; ask: number }; closePrice: { bid: number; ask: number }; lastTradedVolume?: number }> };
 
-export type CapitalAssetClass = "shares" | "crypto" | "forex" | "indices" | "commodities";
+export type CapitalAssetClass = "shares" | "saudi" | "crypto" | "forex" | "indices" | "commodities";
 export type CapitalCandidate = StockSnapshot & { epic: string; spreadPct: number; marketStatus: string; assetClass: CapitalAssetClass };
 
-const instrumentTypes: Record<CapitalAssetClass, string> = {
+const instrumentTypes: Record<Exclude<CapitalAssetClass, "saudi">, string> = {
   shares: "SHARES",
   crypto: "CRYPTOCURRENCIES",
   forex: "CURRENCIES",
@@ -23,6 +25,7 @@ const instrumentTypes: Record<CapitalAssetClass, string> = {
 
 const spreadLimits: Record<CapitalAssetClass, number> = {
   shares: 1.5,
+  saudi: 2.2,
   crypto: 3,
   forex: 0.6,
   indices: 1.2,
@@ -94,20 +97,66 @@ function discoveryScore(item: MarketSummary) {
   return momentum + live + streaming - spread * 12;
 }
 
+function validMarket(item: MarketSummary, assetClass: CapitalAssetClass) {
+  if (!item.epic || !["TRADEABLE", "CLOSED"].includes(item.marketStatus ?? "")) return false;
+  const middle = item.bid && item.offer ? (item.bid + item.offer) / 2 : 0;
+  if (!(middle > 0) || marketSpread(item) > spreadLimits[assetClass]) return false;
+  if (["shares", "saudi"].includes(assetClass) && (middle < 0.05 || middle > 1500)) return false;
+  return true;
+}
+
+function isSaudiName(value: string | undefined) {
+  return /saudi|السعود/i.test(String(value ?? ""));
+}
+
+async function discoverSaudiMarkets() {
+  const root = await capitalRequest<MarketNavigation>("/marketnavigation");
+  const queue = (root.nodes ?? []).map((node) => ({ node, depth: 0, saudiBranch: isSaudiName(node.name) }));
+  const visited = new Set<string>();
+  const collected: MarketSummary[] = [];
+  let requests = 0;
+
+  while (queue.length && requests < 45) {
+    const current = queue.shift()!;
+    if (!current.node.id || visited.has(current.node.id) || current.depth > 4) continue;
+    visited.add(current.node.id);
+    requests += 1;
+    const response = await capitalRequest<MarketNavigation>(`/marketnavigation/${encodeURIComponent(current.node.id)}`);
+    const branch = current.saudiBranch || isSaudiName(current.node.name);
+    if (branch) collected.push(...(response.markets ?? []));
+    for (const child of response.nodes ?? []) {
+      const childBranch = branch || isSaudiName(child.name);
+      const usefulParent = /popular|shares|stocks|countries|regions|asia|middle east|الأسهم|الدول|آسيا|الشرق/i.test(String(current.node.name ?? ""));
+      if (childBranch || usefulParent || current.depth < 2) queue.push({ node: child, depth: current.depth + 1, saudiBranch: childBranch });
+    }
+  }
+
+  if (!collected.length) {
+    const searched = await capitalRequest<MarketSearch>("/markets?searchTerm=Saudi");
+    collected.push(...(searched.markets ?? []));
+  }
+
+  const unique = new Map<string, MarketSummary>();
+  for (const item of collected) {
+    if (item.instrumentType === "SHARES" && validMarket(item, "saudi")) unique.set(item.epic, item);
+  }
+  return [...unique.values()];
+}
+
 /** Discover the strongest instruments directly from Capital for the selected asset class. */
 export async function discoverCapitalUniverse(limit = 40, assetClass: CapitalAssetClass = "shares") {
   const cached = discoveryCache.get(assetClass);
   if (cached && cached.expiresAt > Date.now()) return cached;
-  const response = await capitalRequest<{ markets?: MarketSummary[] }>("/markets");
-  const expectedType = instrumentTypes[assetClass];
-  const markets = (response.markets ?? []).filter((item) => {
-    if (item.instrumentType !== expectedType || !item.epic) return false;
-    if (!["TRADEABLE", "CLOSED"].includes(item.marketStatus ?? "")) return false;
-    const middle = item.bid && item.offer ? (item.bid + item.offer) / 2 : 0;
-    if (!(middle > 0) || marketSpread(item) > spreadLimits[assetClass]) return false;
-    if (assetClass === "shares" && (middle < 0.25 || middle > 1500)) return false;
-    return true;
-  });
+
+  let markets: MarketSummary[];
+  if (assetClass === "saudi") {
+    markets = await discoverSaudiMarkets();
+  } else {
+    const response = await capitalRequest<{ markets?: MarketSummary[] }>("/markets");
+    const expectedType = instrumentTypes[assetClass];
+    markets = (response.markets ?? []).filter((item) => item.instrumentType === expectedType && validMarket(item, assetClass));
+  }
+
   const selected = markets.sort((a, b) => discoveryScore(b) - discoveryScore(a)).slice(0, limit);
   for (const item of selected) {
     const resolved = {
@@ -144,7 +193,7 @@ function snapshot(symbol: string, name: string, epic: string, status: string, sp
   const frames = { weekly: weekly(daily), daily: frame(daily), hourly: frame(aggregate(m5, 12)), m15: frame(aggregate(m5, 3)), m5: frame(m5) };
   const high = Math.max(...m5.slice(-78).map((x) => x.h));
   return {
-    symbol, name, epic, marketStatus: status, spreadPct, assetClass, market: "US", price, changePct,
+    symbol, name, epic, marketStatus: status, spreadPct, assetClass, market: assetClass === "saudi" ? "SA" : "US", price, changePct,
     sessionGainPct: changePct, pullbackFromHighPct: high ? (high - price) / high * 100 : 0,
     volumeRatio, rsi: frames.m5.rsi, macdSignal: frames.m5.macdSignal, trend: frames.m5.trend,
     breakout, resistanceDistancePct: Math.max(0, (nextResistance - price) / price * 100),
