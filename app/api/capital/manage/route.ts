@@ -23,6 +23,10 @@ const schema = z.object({
 
 type CapitalResult = { dealReference?: string };
 
+function envEnabled(value: string | undefined) {
+  return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: cors });
 }
@@ -33,7 +37,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "غير مصرح بالوصول إلى Capital Bot." }, { status: 401, headers: cors });
     }
 
-    if (process.env.CAPITAL_TRADING_ENABLED !== "true") {
+    if (!envEnabled(process.env.CAPITAL_TRADING_ENABLED)) {
       return NextResponse.json(
         { error: "إدارة الصفقات الحقيقية مقفلة. فعّل CAPITAL_TRADING_ENABLED بعد اختبار الحساب التجريبي." },
         { status: 403, headers: cors },
