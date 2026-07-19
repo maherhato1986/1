@@ -2,14 +2,12 @@ import { Bar, completedBars, macdSignal, rsi, sma, trueRangeAverage } from "@/li
 import { Direction, FrameSignal, StockSnapshot } from "@/lib/maherHero";
 import { capitalRequest } from "@/lib/capital/client";
 
-type MarketSearch = { markets?: Array<{ epic: string; symbol?: string; instrumentName?: string; instrumentType?: string; marketStatus?: string; bid?: number; offer?: number }> };
+type MarketSearch = { markets?: Array<{ epic: string; symbol?: string; instrumentName?: string; instrumentType?: string; marketStatus?: string; bid?: number; offer?: number; percentageChange?: number; streamingPricesAvailable?: boolean }> };
 type MarketSummary = {
   epic: string; symbol?: string; instrumentName?: string; instrumentType?: string;
   marketStatus?: string; bid?: number; offer?: number; percentageChange?: number;
   streamingPricesAvailable?: boolean;
 };
-type MarketNode = { id: string; name?: string };
-type MarketNavigation = { nodes?: MarketNode[]; markets?: MarketSummary[] };
 type PriceResponse = { prices?: Array<{ snapshotTimeUTC: string; openPrice: { bid: number; ask: number }; highPrice: { bid: number; ask: number }; lowPrice: { bid: number; ask: number }; closePrice: { bid: number; ask: number }; lastTradedVolume?: number }> };
 
 export type CapitalAssetClass = "shares" | "saudi" | "crypto" | "forex" | "indices" | "commodities";
@@ -31,6 +29,16 @@ const spreadLimits: Record<CapitalAssetClass, number> = {
   indices: 1.2,
   commodities: 1.8,
 };
+
+const defaultSaudiSymbols = [
+  "1010", "1020", "1030", "1050", "1060", "1080", "1120", "1140", "1150", "1180",
+  "1211", "2010", "2020", "2050", "2060", "2070", "2080", "2081", "2082", "2090",
+  "2222", "2250", "2280", "2290", "2380", "4001", "4002", "4003", "4004", "4005",
+  "4006", "4011", "4012", "4030", "4050", "4061", "4070", "4080", "4090", "4100",
+  "4190", "4200", "4240", "4250", "4260", "4270", "4280", "4290", "4300", "4310",
+  "4320", "4330", "4340", "5110", "6010", "6020", "6040", "6050", "6060", "7010",
+  "7020", "7030", "7040", "7200", "7201", "7202", "7203", "7204", "8010", "8020",
+];
 
 const epicCache = new Map<string, { epic: string; name: string; status: string; spreadPct: number }>();
 const discoveryCache = new Map<CapitalAssetClass, { expiresAt: number; symbols: string[]; totalMarkets: number }>();
@@ -105,41 +113,40 @@ function validMarket(item: MarketSummary, assetClass: CapitalAssetClass) {
   return true;
 }
 
-function isSaudiName(value: string | undefined) {
-  return /saudi|السعود/i.test(String(value ?? ""));
+function saudiSymbols() {
+  const configured = process.env.CAPITAL_SAUDI_SYMBOLS
+    ?.split(",")
+    .map((item) => item.trim())
+    .filter((item) => /^\d{4}$/.test(item));
+  return Array.from(new Set([...(configured ?? []), ...defaultSaudiSymbols]));
 }
 
+/** Capital's regional "Popular" lists are not exchanges. Accept exact 4-digit Tadawul symbols only. */
 async function discoverSaudiMarkets() {
-  const root = await capitalRequest<MarketNavigation>("/marketnavigation");
-  const queue = (root.nodes ?? []).map((node) => ({ node, depth: 0, saudiBranch: isSaudiName(node.name) }));
-  const visited = new Set<string>();
+  const symbols = saudiSymbols();
   const collected: MarketSummary[] = [];
-  let requests = 0;
 
-  while (queue.length && requests < 45) {
-    const current = queue.shift()!;
-    if (!current.node.id || visited.has(current.node.id) || current.depth > 4) continue;
-    visited.add(current.node.id);
-    requests += 1;
-    const response = await capitalRequest<MarketNavigation>(`/marketnavigation/${encodeURIComponent(current.node.id)}`);
-    const branch = current.saudiBranch || isSaudiName(current.node.name);
-    if (branch) collected.push(...(response.markets ?? []));
-    for (const child of response.nodes ?? []) {
-      const childBranch = branch || isSaudiName(child.name);
-      const usefulParent = /popular|shares|stocks|countries|regions|asia|middle east|الأسهم|الدول|آسيا|الشرق/i.test(String(current.node.name ?? ""));
-      if (childBranch || usefulParent || current.depth < 2) queue.push({ node: child, depth: current.depth + 1, saudiBranch: childBranch });
-    }
-  }
-
-  if (!collected.length) {
-    const searched = await capitalRequest<MarketSearch>("/markets?searchTerm=Saudi");
-    collected.push(...(searched.markets ?? []));
+  for (let index = 0; index < symbols.length; index += 4) {
+    const batch = symbols.slice(index, index + 4);
+    const responses = await Promise.all(batch.map(async (symbol) => {
+      try {
+        const response = await capitalRequest<MarketSearch>(`/markets?searchTerm=${encodeURIComponent(symbol)}`);
+        const exact = (response.markets ?? []).find((item) => {
+          const marketSymbol = String(item.symbol ?? "").trim();
+          const epic = String(item.epic ?? "").trim();
+          return item.instrumentType === "SHARES" && (marketSymbol === symbol || epic === symbol);
+        });
+        return exact && validMarket(exact, "saudi") ? exact : null;
+      } catch {
+        return null;
+      }
+    }));
+    for (const item of responses) if (item) collected.push(item);
+    if (index + 4 < symbols.length) await wait(1100);
   }
 
   const unique = new Map<string, MarketSummary>();
-  for (const item of collected) {
-    if (item.instrumentType === "SHARES" && validMarket(item, "saudi")) unique.set(item.epic, item);
-  }
+  for (const item of collected) unique.set(item.epic, item);
   return Array.from(unique.values());
 }
 
@@ -168,7 +175,7 @@ export async function discoverCapitalUniverse(limit = 40, assetClass: CapitalAss
     epicCache.set(item.epic.toUpperCase(), resolved);
     if (item.symbol) epicCache.set(item.symbol.toUpperCase(), resolved);
   }
-  const result = { expiresAt: Date.now() + 5 * 60_000, symbols: selected.map((item) => item.epic.toUpperCase()), totalMarkets: markets.length };
+  const result = { expiresAt: Date.now() + 5 * 60_000, symbols: selected.map((item) => (item.symbol ?? item.epic).toUpperCase()), totalMarkets: markets.length };
   discoveryCache.set(assetClass, result);
   return result;
 }
