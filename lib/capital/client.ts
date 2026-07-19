@@ -11,6 +11,11 @@ declare global {
   var capitalSessionPromise: Promise<SessionTokens> | undefined;
 }
 
+function isDemoMode() {
+  const value = String(process.env.CAPITAL_DEMO ?? "true").trim().toLowerCase();
+  return !["false", "0", "no", "off"].includes(value);
+}
+
 function config() {
   const apiKey = process.env.CAPITAL_API_KEY;
   const identifier = process.env.CAPITAL_IDENTIFIER;
@@ -22,7 +27,7 @@ function config() {
     apiKey,
     identifier,
     password,
-    base: process.env.CAPITAL_DEMO === "false" ? LIVE_BASE : DEMO_BASE,
+    base: isDemoMode() ? DEMO_BASE : LIVE_BASE,
   };
 }
 
@@ -35,7 +40,10 @@ async function createSession(): Promise<SessionTokens> {
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) throw new Error(`فشل تسجيل الدخول إلى Capital (${response.status}).`);
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`فشل تسجيل الدخول إلى Capital (${response.status})${detail ? `: ${detail.slice(0, 160)}` : ""}.`);
+  }
   const cst = response.headers.get("cst");
   const securityToken = response.headers.get("x-security-token");
   if (!cst || !securityToken) throw new Error("لم ترجع Capital رموز الجلسة المطلوبة.");
@@ -75,11 +83,16 @@ export async function capitalRequest<T>(path: string, options?: { method?: Capit
   }
   const text = await response.text();
   if (!response.ok) throw new Error(`Capital API (${response.status}): ${text.slice(0, 220)}`);
-  return (text ? JSON.parse(text) : {}) as T;
+  if (!text) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Capital API أعادت استجابة غير صالحة.");
+  }
 }
 
 export function capitalMode() {
-  return process.env.CAPITAL_DEMO === "false" ? "live" : "demo";
+  return isDemoMode() ? "demo" : "live";
 }
 
 export function capitalConfigured() {
