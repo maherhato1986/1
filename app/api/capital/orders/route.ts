@@ -15,11 +15,77 @@ const orderSchema = z.object({
   size: z.number().positive().max(100_000), entry: z.number().positive(), stop: z.number().positive(), target: z.number().positive(),
   score: z.number().min(0).max(100), confirmation: z.string().optional(),
 });
-type MarketDetails = { instrument?: { marginFactor?: number; marginFactorUnit?: string }; dealingRules?: { minDealSize?: { value?: number }; maxDealSize?: { value?: number }; minSizeIncrement?: { value?: number } }; snapshot?: { marketStatus?: string } };
-type AccountsResponse = { accounts?: Array<{ balance?: { balance?: number; profitLoss?: number; available?: number } }> };
+
+type MarketDetails = {
+  instrument?: {
+    epic?: string;
+    name?: string;
+    type?: string;
+    currency?: string;
+    lotSize?: number;
+    marginFactor?: number;
+    marginFactorUnit?: string;
+  };
+  dealingRules?: {
+    minDealSize?: { value?: number };
+    maxDealSize?: { value?: number };
+    minSizeIncrement?: { value?: number };
+  };
+  snapshot?: { marketStatus?: string; bid?: number; offer?: number };
+};
+
+type MarketSearch = {
+  markets?: Array<{
+    epic?: string;
+    symbol?: string;
+    instrumentName?: string;
+    bid?: number;
+    offer?: number;
+  }>;
+};
+
+type AccountsResponse = {
+  accounts?: Array<{
+    currency?: string;
+    balance?: { balance?: number; profitLoss?: number; available?: number };
+  }>;
+};
 
 function envEnabled(value: string | undefined) {
   return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function normalizeCurrency(value: string | undefined) {
+  return String(value ?? "").trim().toUpperCase();
+}
+
+function marketMid(item: { bid?: number; offer?: number }) {
+  const bid = Number(item.bid ?? 0);
+  const offer = Number(item.offer ?? 0);
+  return bid > 0 && offer > 0 ? (bid + offer) / 2 : 0;
+}
+
+async function currencyRate(fromCurrency: string, toCurrency: string) {
+  const from = normalizeCurrency(fromCurrency);
+  const to = normalizeCurrency(toCurrency);
+  if (!from || !to || from === to) return { rate: 1, pair: `${from}/${to}`, inverse: false };
+
+  const directLabel = `${from}/${to}`;
+  const inverseLabel = `${to}/${from}`;
+  const searches = [directLabel, `${from}${to}`, inverseLabel, `${to}${from}`];
+
+  for (const searchTerm of searches) {
+    const response = await capitalRequest<MarketSearch>(`/markets?searchTerm=${encodeURIComponent(searchTerm)}`).catch(() => ({ markets: [] }));
+    for (const item of response.markets ?? []) {
+      const label = `${item.symbol ?? ""} ${item.instrumentName ?? ""} ${item.epic ?? ""}`.toUpperCase().replace(/[^A-Z]/g, "");
+      const mid = marketMid(item);
+      if (!(mid > 0)) continue;
+      if (label.includes(`${from}${to}`)) return { rate: mid, pair: directLabel, inverse: false };
+      if (label.includes(`${to}${from}`)) return { rate: 1 / mid, pair: inverseLabel, inverse: true };
+    }
+  }
+
+  return { rate: null as number | null, pair: directLabel, inverse: false };
 }
 
 export function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
@@ -28,29 +94,82 @@ export async function POST(request: Request) {
   try {
     if (!authorized(request)) return NextResponse.json({ error: "غير مصرح بالوصول إلى Capital Bot." }, { status: 401, headers: cors });
     const input = orderSchema.parse(await request.json());
-    const riskPerUnit = Math.abs(input.entry - input.stop);
-    const riskAmount = riskPerUnit * input.size;
-    const rewardAmount = Math.abs(input.target - input.entry) * input.size;
+
     const [market, accounts] = await Promise.all([
       capitalRequest<MarketDetails>(`/markets/${encodeURIComponent(input.epic)}`),
       capitalRequest<AccountsResponse>("/accounts"),
     ]);
-    const equity = accounts.accounts?.[0]?.balance?.balance ?? 0;
-    const available = accounts.accounts?.[0]?.balance?.available ?? 0;
-    const exposure = input.entry * input.size;
-    const marginFactor = market.instrument?.marginFactor ?? 0;
-    const estimatedMargin = market.instrument?.marginFactorUnit === "PERCENTAGE" ? exposure * marginFactor / 100 : exposure / Math.max(1, marginFactor);
+
+    const account = accounts.accounts?.[0];
+    const accountCurrency = normalizeCurrency(account?.currency) || "USD";
+    const instrumentCurrency = normalizeCurrency(market.instrument?.currency) || accountCurrency;
+    const conversion = await currencyRate(instrumentCurrency, accountCurrency);
+
+    const equity = account?.balance?.balance ?? 0;
+    const available = account?.balance?.available ?? 0;
+    const lotSize = Math.max(0.00000001, Number(market.instrument?.lotSize ?? 1));
+    const riskPerUnitInstrument = Math.abs(input.entry - input.stop) * lotSize;
+    const rewardPerUnitInstrument = Math.abs(input.target - input.entry) * lotSize;
+    const exposureInstrument = input.entry * input.size * lotSize;
+    const conversionRate = conversion.rate;
+
+    const riskAmount = conversionRate === null ? null : riskPerUnitInstrument * input.size * conversionRate;
+    const rewardAmount = conversionRate === null ? null : rewardPerUnitInstrument * input.size * conversionRate;
+    const exposure = conversionRate === null ? null : exposureInstrument * conversionRate;
+
+    const marginFactor = Number(market.instrument?.marginFactor ?? NaN);
+    const marginFactorUnit = String(market.instrument?.marginFactorUnit ?? "").toUpperCase();
+    const marginKnown = Number.isFinite(marginFactor) && marginFactor > 0 && marginFactorUnit === "PERCENTAGE" && exposure !== null;
+    const estimatedMargin = marginKnown ? exposure * marginFactor / 100 : null;
+    const leverage = marginKnown ? 100 / marginFactor : null;
+
     const minSize = market.dealingRules?.minDealSize?.value ?? 0;
     const maxSize = market.dealingRules?.maxDealSize?.value ?? Number.MAX_SAFE_INTEGER;
-    const riskPct = equity ? riskAmount / equity * 100 : 0;
+    const riskPct = equity && riskAmount !== null ? riskAmount / equity * 100 : 0;
+    const marketStatus = market.snapshot?.marketStatus ?? "UNKNOWN";
+
     const warnings = [
       ...(input.size < minSize ? [`الحد الأدنى للحجم ${minSize}`] : []),
       ...(input.size > maxSize ? [`الحد الأقصى للحجم ${maxSize}`] : []),
+      ...(riskAmount === null ? [`تعذر تحويل عملة الأداة من ${instrumentCurrency} إلى ${accountCurrency}`] : []),
       ...(riskPct > 1 ? ["المخاطرة تتجاوز 1% من الحساب"] : []),
-      ...(estimatedMargin > available ? ["الهامش المطلوب يتجاوز المتاح"] : []),
-      ...(market.snapshot?.marketStatus !== "TRADEABLE" ? ["السوق غير متاح للتداول الآن"] : []),
+      ...(!marginKnown ? [`تعذر احتساب الهامش بدقة: وحدة الهامش ${marginFactorUnit || "غير متوفرة"}`] : []),
+      ...(estimatedMargin !== null && estimatedMargin > available ? ["الهامش المطلوب يتجاوز المتاح"] : []),
+      ...(marketStatus !== "TRADEABLE" ? ["الأداة غير متاحة للتداول عبر Capital الآن"] : []),
     ];
-    const preview = { ...input, tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED), riskPerUnit, riskAmount, rewardAmount, riskReward: riskAmount ? rewardAmount / riskAmount : 0, mode: capitalMode(), exposure, equity, available, riskPct, marginFactor, estimatedMargin, availableAfterMargin: available - estimatedMargin, minSize, maxSize, sizeIncrement: market.dealingRules?.minSizeIncrement?.value ?? 0.01, marketStatus: market.snapshot?.marketStatus ?? "UNKNOWN", warnings };
+
+    const preview = {
+      ...input,
+      tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED),
+      instrumentName: market.instrument?.name ?? input.symbol,
+      instrumentType: market.instrument?.type ?? "UNKNOWN",
+      instrumentCurrency,
+      accountCurrency,
+      lotSize,
+      conversionRate,
+      conversionPair: conversion.pair,
+      riskPerUnit: conversionRate === null ? null : riskPerUnitInstrument * conversionRate,
+      riskAmount,
+      rewardAmount,
+      riskReward: riskAmount && rewardAmount !== null ? rewardAmount / riskAmount : 0,
+      mode: capitalMode(),
+      exposure,
+      exposureInstrument,
+      equity,
+      available,
+      riskPct,
+      marginFactor: Number.isFinite(marginFactor) ? marginFactor : null,
+      marginFactorUnit,
+      leverage,
+      estimatedMargin,
+      availableAfterMargin: estimatedMargin === null ? null : available - estimatedMargin,
+      minSize,
+      maxSize,
+      sizeIncrement: market.dealingRules?.minSizeIncrement?.value ?? 0.01,
+      marketStatus,
+      warnings,
+    };
+
     if (input.action === "preview") return NextResponse.json({ status: "preview", preview }, { headers: { ...cors, "Cache-Control": "no-store" } });
     if (!envEnabled(process.env.CAPITAL_TRADING_ENABLED)) {
       return NextResponse.json({ error: "التنفيذ الحقيقي مقفل. فعّل CAPITAL_TRADING_ENABLED بعد اختبار الحساب التجريبي.", preview }, { status: 403, headers: cors });
@@ -58,6 +177,7 @@ export async function POST(request: Request) {
     if (input.confirmation !== "EXECUTE" || input.score < 90 || preview.riskReward < 1.8 || warnings.length) {
       return NextResponse.json({ error: `رفض محرك المخاطر الأمر${warnings.length ? `: ${warnings.join("، ")}` : ": يلزم تأكيد صريح ونتيجة 90+ وعائد/مخاطرة 1.8+"}.`, preview }, { status: 422, headers: cors });
     }
+
     const body = input.type === "MARKET"
       ? { epic: input.epic, direction: input.direction, size: input.size, guaranteedStop: false, stopLevel: input.stop, profitLevel: input.target }
       : { epic: input.epic, direction: input.direction, size: input.size, level: input.entry, type: "GOOD_TILL_CANCELLED", guaranteedStop: false, stopLevel: input.stop, profitLevel: input.target };
