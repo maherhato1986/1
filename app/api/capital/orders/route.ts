@@ -46,9 +46,14 @@ type MarketSearch = {
 
 type AccountsResponse = {
   accounts?: Array<{
+    preferred?: boolean;
     currency?: string;
-    balance?: { balance?: number; profitLoss?: number; available?: number };
+    balance?: { balance?: number; deposit?: number; profitLoss?: number; available?: number };
   }>;
+};
+
+type AccountPreferences = {
+  leverages?: Record<string, { current?: number; available?: number[] }>;
 };
 
 type DealConfirmation = {
@@ -103,6 +108,16 @@ function confirmationAccepted(confirmation: DealConfirmation) {
   return dealStatus === "ACCEPTED" || ["OPEN", "OPENED", "PENDING", "AMENDED"].includes(status) || Boolean(confirmation.dealId);
 }
 
+function normalizedInstrumentType(value: string | undefined) {
+  const type = String(value ?? "").trim().toUpperCase();
+  if (type === "CURRENCY" || type === "FOREX") return "CURRENCIES";
+  if (type === "CRYPTOCURRENCY" || type === "CRYPTO") return "CRYPTOCURRENCIES";
+  if (type === "COMMODITY") return "COMMODITIES";
+  if (type === "INDEX") return "INDICES";
+  if (type === "SHARE" || type === "STOCK") return "SHARES";
+  return type;
+}
+
 export function OPTIONS() { return new NextResponse(null, { status: 204, headers: cors }); }
 
 export async function POST(request: Request) {
@@ -110,18 +125,22 @@ export async function POST(request: Request) {
     if (!authorized(request)) return NextResponse.json({ error: "غير مصرح بالوصول إلى Capital Bot." }, { status: 401, headers: cors });
     const input = orderSchema.parse(await request.json());
 
-    const [market, accounts] = await Promise.all([
+    const [market, accounts, preferences] = await Promise.all([
       capitalRequest<MarketDetails>(`/markets/${encodeURIComponent(input.epic)}`),
       capitalRequest<AccountsResponse>("/accounts"),
+      capitalRequest<AccountPreferences>("/accounts/preferences").catch(() => ({ leverages: {} })),
     ]);
 
-    const account = accounts.accounts?.[0];
+    const account = accounts.accounts?.find((item) => item.preferred) ?? accounts.accounts?.[0];
     const accountCurrency = normalizeCurrency(account?.currency) || "USD";
     const instrumentCurrency = normalizeCurrency(market.instrument?.currency) || accountCurrency;
     const conversion = await currencyRate(instrumentCurrency, accountCurrency);
 
-    const equity = account?.balance?.balance ?? 0;
-    const available = account?.balance?.available ?? 0;
+    const equity = Number(account?.balance?.balance ?? 0);
+    const cashBalance = Number(account?.balance?.deposit ?? (equity - Number(account?.balance?.profitLoss ?? 0)));
+    const profitLoss = Number(account?.balance?.profitLoss ?? 0);
+    const available = Number(account?.balance?.available ?? 0);
+    const usedMargin = Math.max(0, equity - available);
     const lotSize = Math.max(0.00000001, Number(market.instrument?.lotSize ?? 1));
     const riskPerUnitInstrument = Math.abs(input.entry - input.stop) * lotSize;
     const rewardPerUnitInstrument = Math.abs(input.target - input.entry) * lotSize;
@@ -132,11 +151,19 @@ export async function POST(request: Request) {
     const rewardAmount = conversionRate === null ? null : rewardPerUnitInstrument * input.size * conversionRate;
     const exposure = conversionRate === null ? null : exposureInstrument * conversionRate;
 
+    const instrumentType = normalizedInstrumentType(market.instrument?.type);
+    const accountLeverage = Number(preferences.leverages?.[instrumentType]?.current ?? NaN);
     const marginFactor = Number(market.instrument?.marginFactor ?? NaN);
     const marginFactorUnit = String(market.instrument?.marginFactorUnit ?? "").toUpperCase();
-    const marginKnown = Number.isFinite(marginFactor) && marginFactor > 0 && marginFactorUnit === "PERCENTAGE" && exposure !== null;
-    const estimatedMargin = marginKnown ? exposure * marginFactor / 100 : null;
-    const leverage = marginKnown ? 100 / marginFactor : null;
+    const factorLeverage = Number.isFinite(marginFactor) && marginFactor > 0 && marginFactorUnit === "PERCENTAGE" ? 100 / marginFactor : null;
+    const leverage = Number.isFinite(accountLeverage) && accountLeverage > 0 ? accountLeverage : factorLeverage;
+    const marginSource = Number.isFinite(accountLeverage) && accountLeverage > 0 ? "ACCOUNT_PREFERENCES" : factorLeverage ? "MARKET_FACTOR" : "UNKNOWN";
+    const marginKnown = leverage !== null && exposure !== null;
+    const estimatedMargin = marginKnown ? exposure / leverage : null;
+    const availableAfterMargin = estimatedMargin === null ? null : available - estimatedMargin;
+    const totalMarginAfter = estimatedMargin === null ? null : usedMargin + estimatedMargin;
+    const marginUsageNowPct = equity > 0 ? usedMargin / equity * 100 : 0;
+    const marginUsageAfterPct = equity > 0 && totalMarginAfter !== null ? totalMarginAfter / equity * 100 : null;
 
     const minSize = market.dealingRules?.minDealSize?.value ?? 0;
     const maxSize = market.dealingRules?.maxDealSize?.value ?? Number.MAX_SAFE_INTEGER;
@@ -151,8 +178,8 @@ export async function POST(request: Request) {
       ...(sizeSteps > 1e-7 ? [`الحجم يجب أن يكون بمضاعفات ${sizeIncrement}`] : []),
       ...(riskAmount === null ? [`تعذر تحويل عملة الأداة من ${instrumentCurrency} إلى ${accountCurrency}`] : []),
       ...(riskPct > 1.0001 ? ["المخاطرة تتجاوز 1% من الحساب"] : []),
-      ...(!marginKnown ? [`تعذر احتساب الهامش بدقة: وحدة الهامش ${marginFactorUnit || "غير متوفرة"}`] : []),
-      ...(estimatedMargin !== null && estimatedMargin > available ? ["الهامش المطلوب يتجاوز المتاح"] : []),
+      ...(!marginKnown ? ["تعذر احتساب الهامش من رافعة الحساب أو بيانات الأداة"] : []),
+      ...(estimatedMargin !== null && estimatedMargin > available ? ["الهامش المطلوب يتجاوز الهامش الحر"] : []),
       ...(marketStatus !== "TRADEABLE" ? ["الأداة غير متاحة للتداول عبر Capital الآن"] : []),
     ];
 
@@ -160,7 +187,7 @@ export async function POST(request: Request) {
       ...input,
       tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED),
       instrumentName: market.instrument?.name ?? input.symbol,
-      instrumentType: market.instrument?.type ?? "UNKNOWN",
+      instrumentType,
       instrumentCurrency,
       accountCurrency,
       lotSize,
@@ -174,13 +201,21 @@ export async function POST(request: Request) {
       exposure,
       exposureInstrument,
       equity,
+      cashBalance,
+      profitLoss,
       available,
+      usedMargin,
+      marginUsageNowPct,
       riskPct,
       marginFactor: Number.isFinite(marginFactor) ? marginFactor : null,
       marginFactorUnit,
+      accountLeverage: Number.isFinite(accountLeverage) ? accountLeverage : null,
       leverage,
+      marginSource,
       estimatedMargin,
-      availableAfterMargin: estimatedMargin === null ? null : available - estimatedMargin,
+      availableAfterMargin,
+      totalMarginAfter,
+      marginUsageAfterPct,
       minSize,
       maxSize,
       sizeIncrement,
