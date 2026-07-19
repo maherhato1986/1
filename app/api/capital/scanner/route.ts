@@ -12,8 +12,8 @@ export const maxDuration = 60;
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" };
 type AccountsResponse = { accounts?: Array<{ accountId: string; accountName?: string; currency?: string; balance?: { balance?: number; deposit?: number; profitLoss?: number; available?: number } }> };
 
-const allowedAssetClasses = new Set<CapitalAssetClass>(["shares", "crypto", "forex", "indices", "commodities"]);
-const assetLabels: Record<CapitalAssetClass, string> = { shares: "الأسهم الأمريكية", crypto: "العملات الرقمية", forex: "الفوركس", indices: "المؤشرات", commodities: "السلع" };
+const allowedAssetClasses = new Set<CapitalAssetClass>(["shares", "saudi", "crypto", "forex", "indices", "commodities"]);
+const assetLabels: Record<CapitalAssetClass, string> = { shares: "الأسهم الأمريكية", saudi: "السوق السعودي", crypto: "العملات الرقمية", forex: "الفوركس", indices: "المؤشرات", commodities: "السلع" };
 
 function envEnabled(value: string | undefined) {
   return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
@@ -43,7 +43,7 @@ export async function GET(request: Request) {
   try {
     const requested = new URL(request.url).searchParams.get("market") as CapitalAssetClass | null;
     const assetClass: CapitalAssetClass = requested && allowedAssetClasses.has(requested) ? requested : "shares";
-    let source: "capital-market" | "configured-fallback" = "capital-market";
+    let source: "capital-market" | "capital-navigation" | "configured-fallback" = assetClass === "saudi" ? "capital-navigation" : "capital-market";
     let marketUniverse = 0;
     let symbols: string[];
     try {
@@ -68,7 +68,8 @@ export async function GET(request: Request) {
       const warnings = [...hero.warnings];
       const marketOpen = stock.marketStatus === "TRADEABLE";
       if (!marketOpen) { score = Math.min(score, 59); warnings.push("السوق غير متاح للتداول الآن"); }
-      if (stock.spreadPct > 0.8) { score = Math.min(score, 79); warnings.push("السبريد مرتفع"); }
+      const spreadCap = assetClass === "forex" ? 0.6 : assetClass === "crypto" ? 3 : assetClass === "saudi" ? 2.2 : 0.8;
+      if (stock.spreadPct > spreadCap) { score = Math.min(score, 79); warnings.push("السبريد مرتفع"); }
       const plan = tradePlan(stock.price, stock.stopDistancePct, stock.breakout);
       const actionStatus = marketOpen && score >= 90 && ["early", "retest"].includes(stock.breakout) ? "ready" : rawScore >= 80 ? "near" : "watch";
       return { ...stock, ...hero, rawScore, score, warnings, ...plan, actionStatus, marketOpen, signalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
