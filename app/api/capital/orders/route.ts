@@ -156,10 +156,10 @@ export async function POST(request: Request) {
     const marginFactor = Number(market.instrument?.marginFactor ?? NaN);
     const marginFactorUnit = String(market.instrument?.marginFactorUnit ?? "").toUpperCase();
     const factorLeverage = Number.isFinite(marginFactor) && marginFactor > 0 && marginFactorUnit === "PERCENTAGE" ? 100 / marginFactor : null;
-    const leverage = Number.isFinite(accountLeverage) && accountLeverage > 0 ? accountLeverage : factorLeverage;
-    const marginSource = Number.isFinite(accountLeverage) && accountLeverage > 0 ? "ACCOUNT_PREFERENCES" : factorLeverage ? "MARKET_FACTOR" : "UNKNOWN";
-    const marginKnown = leverage !== null && exposure !== null;
-    const estimatedMargin = marginKnown ? exposure / leverage : null;
+    const leverage: number | null = Number.isFinite(accountLeverage) && accountLeverage > 0 ? accountLeverage : factorLeverage;
+    const marginSource = Number.isFinite(accountLeverage) && accountLeverage > 0 ? "ACCOUNT_PREFERENCES" : factorLeverage !== null ? "MARKET_FACTOR" : "UNKNOWN";
+    const estimatedMargin = exposure !== null && leverage !== null ? exposure / leverage : null;
+    const marginKnown = estimatedMargin !== null;
     const availableAfterMargin = estimatedMargin === null ? null : available - estimatedMargin;
     const totalMarginAfter = estimatedMargin === null ? null : usedMargin + estimatedMargin;
     const marginUsageNowPct = equity > 0 ? usedMargin / equity * 100 : 0;
