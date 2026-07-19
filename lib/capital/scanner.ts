@@ -140,7 +140,7 @@ async function discoverSaudiMarkets() {
   for (const item of collected) {
     if (item.instrumentType === "SHARES" && validMarket(item, "saudi")) unique.set(item.epic, item);
   }
-  return [...unique.values()];
+  return Array.from(unique.values());
 }
 
 /** Discover the strongest instruments directly from Capital for the selected asset class. */
