@@ -78,7 +78,7 @@ export async function GET(request: Request) {
       const plan = tradePlan(stock.price, stock.stopDistancePct, stock.breakout);
       const executionEligible = marketOpen && hero.executionEligible && stock.spreadPct <= spreadCap;
       const actionStatus = executionEligible && score >= 85 ? "ready" : executionEligible && score >= 70 ? "near" : "watch";
-      return { ...stock, ...hero, rawScore, score, warnings, ...plan, actionStatus, marketOpen, signalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
+      return { ...stock, ...hero, rawScore, score, warnings, ...plan, executionEligible, actionStatus, marketOpen, signalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
     }).sort((a, b) => b.rawScore - a.rawScore || b.volumeRatio - a.volumeRatio).slice(0, 10);
     const diagnostic = scan.diagnostics[0];
     return NextResponse.json({
