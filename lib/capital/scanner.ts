@@ -41,7 +41,7 @@ const defaultSaudiSymbols = [
 ];
 
 const epicCache = new Map<string, { epic: string; name: string; status: string; spreadPct: number }>();
-const discoveryCache = new Map<CapitalAssetClass, { expiresAt: number; symbols: string[]; totalMarkets: number }>();
+const discoveryCache = new Map<CapitalAssetClass, { expiresAt: number; requestedLimit: number; symbols: string[]; totalMarkets: number }>();
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const mid = (price: { bid: number; ask: number }) => (price.bid + price.ask) / 2;
 
@@ -152,8 +152,11 @@ async function discoverSaudiMarkets() {
 
 /** Discover the strongest instruments directly from Capital for the selected asset class. */
 export async function discoverCapitalUniverse(limit = 40, assetClass: CapitalAssetClass = "shares") {
+  const requestedLimit = Math.max(1, Math.min(250, Math.floor(limit)));
   const cached = discoveryCache.get(assetClass);
-  if (cached && cached.expiresAt > Date.now()) return cached;
+  if (cached && cached.expiresAt > Date.now() && cached.requestedLimit >= requestedLimit) {
+    return { ...cached, symbols: cached.symbols.slice(0, requestedLimit) };
+  }
 
   let markets: MarketSummary[];
   if (assetClass === "saudi") {
@@ -164,7 +167,7 @@ export async function discoverCapitalUniverse(limit = 40, assetClass: CapitalAss
     markets = (response.markets ?? []).filter((item) => item.instrumentType === expectedType && validMarket(item, assetClass));
   }
 
-  const selected = markets.sort((a, b) => discoveryScore(b) - discoveryScore(a)).slice(0, limit);
+  const selected = markets.sort((a, b) => discoveryScore(b) - discoveryScore(a)).slice(0, requestedLimit);
   for (const item of selected) {
     const resolved = {
       epic: item.epic,
@@ -175,7 +178,7 @@ export async function discoverCapitalUniverse(limit = 40, assetClass: CapitalAss
     epicCache.set(item.epic.toUpperCase(), resolved);
     if (item.symbol) epicCache.set(item.symbol.toUpperCase(), resolved);
   }
-  const result = { expiresAt: Date.now() + 5 * 60_000, symbols: selected.map((item) => (item.symbol ?? item.epic).toUpperCase()), totalMarkets: markets.length };
+  const result = { expiresAt: Date.now() + 5 * 60_000, requestedLimit, symbols: selected.map((item) => (item.symbol ?? item.epic).toUpperCase()), totalMarkets: markets.length };
   discoveryCache.set(assetClass, result);
   return result;
 }
