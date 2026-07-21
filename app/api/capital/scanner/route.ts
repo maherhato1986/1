@@ -76,7 +76,8 @@ export async function GET(request: Request) {
       const spreadCap = assetClass === "forex" ? 0.6 : assetClass === "crypto" ? 3 : assetClass === "saudi" ? 2.2 : 0.8;
       if (stock.spreadPct > spreadCap) { score = Math.min(score, 79); warnings.push("السبريد مرتفع"); }
       const plan = tradePlan(stock.price, stock.stopDistancePct, stock.breakout);
-      const actionStatus = marketOpen && score >= 90 && ["early", "retest"].includes(stock.breakout) ? "ready" : rawScore >= 80 ? "near" : "watch";
+      const executionEligible = marketOpen && hero.executionEligible && stock.spreadPct <= spreadCap;
+      const actionStatus = executionEligible && score >= 85 ? "ready" : executionEligible && score >= 70 ? "near" : "watch";
       return { ...stock, ...hero, rawScore, score, warnings, ...plan, actionStatus, marketOpen, signalExpiresAt: new Date(Date.now() + 5 * 60_000).toISOString() };
     }).sort((a, b) => b.rawScore - a.rawScore || b.volumeRatio - a.volumeRatio).slice(0, 10);
     const diagnostic = scan.diagnostics[0];
