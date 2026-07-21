@@ -7,7 +7,7 @@ import { authorized } from "@/lib/capital/auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization" };
 type AccountsResponse = { accounts?: Array<{ accountId: string; accountName?: string; currency?: string; balance?: { balance?: number; deposit?: number; profitLoss?: number; available?: number } }> };
@@ -19,9 +19,9 @@ function envEnabled(value: string | undefined) {
   return ["true", "1", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
 }
 
-function fallbackUniverse() {
+function fallbackUniverse(limit: number) {
   const configured = process.env.CAPITAL_SYMBOLS?.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean);
-  return configured?.length ? configured.slice(0, 40) : [...MAHER_HERO_WATCHLIST];
+  return configured?.length ? configured.slice(0, limit) : [...MAHER_HERO_WATCHLIST];
 }
 
 function tradePlan(price: number, stopPct: number, breakout: string) {
@@ -41,20 +41,25 @@ export async function GET(request: Request) {
     return NextResponse.json({ mode: "setup", tradingEnabled: false, error: "أضف إعدادات Capital API إلى Vercel.", opportunities: [] }, { headers: cors });
   }
   try {
-    const requested = new URL(request.url).searchParams.get("market") as CapitalAssetClass | null;
-    const assetClass: CapitalAssetClass = requested && allowedAssetClasses.has(requested) ? requested : "shares";
+    const searchParams = new URL(request.url).searchParams;
+    const requestedMarket = searchParams.get("market") as CapitalAssetClass | null;
+    const assetClass: CapitalAssetClass = requestedMarket && allowedAssetClasses.has(requestedMarket) ? requestedMarket : "shares";
+    const parsedLimit = Number(searchParams.get("limit"));
+    const requestedLimit = assetClass === "shares"
+      ? Math.max(200, Math.min(250, Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : 200))
+      : 40;
     let source: "capital-market" | "capital-navigation" | "configured-fallback" = assetClass === "saudi" ? "capital-navigation" : "capital-market";
     let marketUniverse = 0;
     let symbols: string[];
     try {
-      const discovered = await discoverCapitalUniverse(40, assetClass);
+      const discovered = await discoverCapitalUniverse(requestedLimit, assetClass);
       symbols = discovered.symbols;
       marketUniverse = discovered.totalMarkets;
       if (!symbols.length) throw new Error(`لم يعثر Capital على أدوات قابلة للفحص ضمن ${assetLabels[assetClass]}`);
     } catch (error) {
       if (assetClass !== "shares") throw error;
       source = "configured-fallback";
-      symbols = fallbackUniverse();
+      symbols = fallbackUniverse(requestedLimit);
     }
     const [scan, accounts] = await Promise.all([
       scanCapitalSymbols(symbols, assetClass),
@@ -77,7 +82,7 @@ export async function GET(request: Request) {
     const diagnostic = scan.diagnostics[0];
     return NextResponse.json({
       mode: capitalMode(), tradingEnabled: envEnabled(process.env.CAPITAL_TRADING_ENABLED), provider: "capital.com", source,
-      assetClass, assetLabel: assetLabels[assetClass], marketUniverse, prefiltered: symbols.length,
+      assetClass, assetLabel: assetLabels[assetClass], marketUniverse, requestedLimit, minimumScan: assetClass === "shares" ? 200 : undefined, prefiltered: symbols.length,
       scanned: symbols.length, analyzed: stocks.length,
       opportunities, account: accounts.accounts?.[0] ?? null, timestamp: new Date().toISOString(), refreshAfterSeconds: 60,
       error: stocks.length ? undefined : diagnostic ? `${diagnostic.symbol}: ${diagnostic.error}` : `لم تتوفر بيانات لتحليل ${assetLabels[assetClass]}.`,
